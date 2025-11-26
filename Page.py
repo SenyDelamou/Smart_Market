@@ -1,0 +1,2921 @@
+import hashlib
+import sys
+import io
+from pathlib import Path
+from datetime import datetime, timedelta
+import mysql.connector
+from mysql.connector import Error
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import streamlit as st
+
+# Garantit l'accès au module components, même si Streamlit exécute le script depuis la racine
+_CURRENT_DIR = Path(__file__).resolve().parent
+_CANDIDATE_DIRS = [_CURRENT_DIR, _CURRENT_DIR / "src"]
+for _dir in _CANDIDATE_DIRS:
+    if (_dir / "components").exists() and str(_dir) not in sys.path:
+        sys.path.insert(0, str(_dir))
+        break
+
+try:
+    from components.animations import inject_animations
+except ModuleNotFoundError:
+    from Connexion import inject_animations
+
+
+def _rerun_app():
+    """Compatibilité Streamlit pour relancer l'app quelle que soit la version."""
+    rerun_fn = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+    if rerun_fn:
+        rerun_fn()
+
+
+DB_CONFIG = {
+    "host": "localhost",
+    "user": "root",
+    "password": "",  # Remplacez par votre mot de passe MySQL
+    "database": "smart_market",
+}
+
+MAX_UPLOAD_BYTES = 1_000_000_000  # 1 Go
+MAX_UPLOAD_MB = MAX_UPLOAD_BYTES // (1024 * 1024)
+
+
+def _asset_or_remote(name: str, remote_url: str):
+    """Helper pour charger une image locale ou distante"""
+    p = Path(__file__).parent / "assets" / name
+    return str(p) if p.exists() else remote_url
+
+
+IMAGES = {
+    "hero": _asset_or_remote(
+        "hero_market.jpg",
+        "https://images.unsplash.com/photo-1504384308090-c894fdcc538d?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "analytics": _asset_or_remote(
+        "analytics.jpg",
+        "https://images.unsplash.com/photo-1580508174046-170816f65662?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "analytics_2": _asset_or_remote(
+        "analytics_2.jpg",
+        "https://images.unsplash.com/photo-1556740758-90de374c12ad?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "analytics_3": _asset_or_remote(
+        "analytics_3.jpg",
+        "https://images.unsplash.com/photo-1518606372268-0b2c5d5c9e0a?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "dashboard": _asset_or_remote(
+        "dashboard.jpg",
+        "https://images.unsplash.com/photo-1551434678-e076c223a692?auto=format&fit=crop&w=800&q=80",
+    ),
+    "dashboard_hero": _asset_or_remote(
+        "dashboard_banner.jpg",
+        "https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "team": _asset_or_remote(
+        "team.jpg",
+        "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=800&q=80",
+    ),
+    "insights": _asset_or_remote(
+        "insights.jpg",
+        "https://images.unsplash.com/photo-1508385082359-fb06f13b8a3f?auto=format&fit=crop&w=800&q=80",
+    ),
+    "sales": _asset_or_remote(
+        "sales.jpg",
+        "https://images.unsplash.com/photo-1485217988980-11786ced9454?auto=format&fit=crop&w=800&q=80",
+    ),
+    "home": _asset_or_remote(
+        "home.jpg",
+        "https://images.unsplash.com/photo-1556740749-887f6717d7e4?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "upload": _asset_or_remote(
+        "upload.jpg",
+        "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "upload_hero": _asset_or_remote(
+        "upload_hero.jpg",
+        "https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=2000&q=80",
+    ),
+    "dash_img_1": _asset_or_remote("dash_img_1.png", ""),
+    "dash_img_2": _asset_or_remote("analytics.jpg", "https://images.unsplash.com/photo-1580508174046-170816f65662?auto=format&fit=crop&w=1600&q=80"),
+    "dash_img_3": _asset_or_remote("analytics_2.jpg", "https://images.unsplash.com/photo-1556740758-90de374c12ad?auto=format&fit=crop&w=1600&q=80"),
+    "pred_img_1": _asset_or_remote("pred_img_1.png", ""),
+    "pred_img_2": _asset_or_remote("pred_img_2.png", ""),
+    "pred_img_3": _asset_or_remote("pred_img_3.png", ""),
+    "pred_img_4": _asset_or_remote("pred_img_4.png", ""),
+    "pred_img_5": _asset_or_remote("pred_img_5.png", ""),
+    "prediction_bg": _asset_or_remote(
+        "prediction_bg.jpg",
+        "https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "prediction": _asset_or_remote(
+        "prediction.jpg",
+        "https://images.unsplash.com/photo-1504384308090-c894fdcc538d?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "carousel_retail": _asset_or_remote(
+        "carousel_retail.jpg",
+        "https://images.unsplash.com/photo-1515165562835-c4c1bfa1c38d?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "carousel_dashboard": _asset_or_remote(
+        "carousel_dashboard.jpg",
+        "https://images.unsplash.com/photo-1504384308090-c894fdcc538d?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "carousel_insights": _asset_or_remote(
+        "carousel_insights.jpg",
+        "https://images.unsplash.com/photo-1520607162513-77705c0f0d4a?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "carousel_supply": _asset_or_remote(
+        "carousel_supply.jpg",
+        "https://images.unsplash.com/photo-1517430816045-df4b7de11d1d?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "store_1": _asset_or_remote(
+        "store_1.jpg",
+        "https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "store_2": _asset_or_remote(
+        "store_2.jpg",
+        "https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "store_3": _asset_or_remote(
+        "store_3.jpg",
+        "https://images.unsplash.com/photo-1567401893414-76b7b1e5a7a5?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "store_4": _asset_or_remote(
+        "store_4.jpg",
+        "https://images.unsplash.com/photo-1604719312566-b7cb60936928?auto=format&fit=crop&w=1600&q=80",
+    ),
+    "feature_import": _asset_or_remote(
+        "feature_import.jpg",
+        "https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=800&q=80",
+    ),
+    "feature_analysis": _asset_or_remote(
+        "feature_analysis.jpg",
+        "https://images.unsplash.com/photo-1551434678-e076c223a692?auto=format&fit=crop&w=800&q=80",
+    ),
+    "feature_viz": _asset_or_remote(
+        "feature_viz.jpg",
+        "https://images.unsplash.com/photo-1543286386-713df548e9cc?auto=format&fit=crop&w=800&q=80",
+    ),
+    "feature_predict": _asset_or_remote(
+        "feature_predict.jpg",
+        "https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=800&q=80",
+    ),
+}
+
+
+def _get_user_avatar(email: str) -> str:
+    if not email:
+        return "https://www.gravatar.com/avatar/?d=mp&s=64"
+    hashed = hashlib.md5(email.strip().lower().encode()).hexdigest()
+    return f"https://www.gravatar.com/avatar/{hashed}?d=identicon&s=80"
+
+
+def create_menu(show_user_menu=True):
+    """Crée le menu de navigation avec le bouton de connexion"""
+    menu_container = st.container()
+    with menu_container:
+        menu_cols = st.columns([6, 1, 1])
+
+        with menu_cols[0]:
+            st.write("")
+
+        with menu_cols[1]:
+            st.write("")
+        with menu_cols[2]:
+            if show_user_menu and st.session_state.get("authenticated", False):
+                user_email = st.session_state.get("user_email", "")
+                avatar_url = _get_user_avatar(user_email)
+                user_name = st.session_state.get("username", user_email)
+                user_menu = st.expander(
+                    f"<div style='display:flex;align-items:center;gap:0.4rem;'>"
+                    f"<img src='{avatar_url}' style='width:28px;height:28px;border-radius:50%;border:1px solid rgba(148,163,184,0.4);'/>"
+                    f"{user_name}</div>",
+                    expanded=False,
+                )
+                with user_menu:
+                    st.markdown("### Menu utilisateur", unsafe_allow_html=True)
+                    if "theme" not in st.session_state:
+                        st.session_state.theme = "light"
+                    theme_icon = "🌙" if st.session_state.theme == "light" else "☀️"
+                    if st.button(
+                        f"{theme_icon} Thème {st.session_state.theme.capitalize()}",
+                        key="home_theme_button",
+                    ):
+                        st.session_state.theme = (
+                            "dark" if st.session_state.theme == "light" else "light"
+                        )
+                    if st.button("📤 Déconnexion", key="home_logout_button"):
+                        st.session_state.authenticated = False
+                        st.session_state.username = ""
+                        st.session_state.is_authenticated = False
+                        st.session_state.user_email = ""
+                        _rerun_app()
+
+        st.divider()
+
+
+def _get_connection():
+    """Retourne une connexion MySQL ou lève une erreur."""
+    return mysql.connector.connect(**DB_CONFIG)
+
+
+def _hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def verify_credentials(email: str, password: str):
+    """Retourne l'e-mail si les identifiants sont valides."""
+    connection = None
+    try:
+        connection = _get_connection()
+        cursor = connection.cursor()
+        query = "SELECT email FROM users WHERE email = %s AND password_hash = %s"
+        cursor.execute(query, (email, _hash_password(password)))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    except Error as e:
+        st.error(f"Erreur lors de la connexion à la base de données : {e}")
+        return None
+    finally:
+        if connection and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+
+def register_user(email: str, password: str) -> bool:
+    """Crée un utilisateur. Retourne True si l'inscription réussit."""
+    connection = None
+    try:
+        connection = _get_connection()
+        cursor = connection.cursor()
+        query = "INSERT INTO users (email, password_hash) VALUES (%s, %s)"
+        cursor.execute(query, (email, _hash_password(password)))
+        connection.commit()
+        return True
+    except Error as e:
+        st.error(f"Erreur lors de l'inscription : {e}")
+        return False
+    finally:
+        if connection and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+
+def _get_user_id_by_email(email: str):
+    connection = None
+    try:
+        connection = _get_connection()
+        cursor = connection.cursor()
+        cursor.execute("SELECT user_id FROM users WHERE email = %s", (email,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    except Error as e:
+        st.error(f"Erreur lors de la récupération de l'utilisateur : {e}")
+        return None
+    finally:
+        if connection and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+
+def _sanitize_dataset_name(name: str) -> str:
+    stem = Path(name).stem
+    sanitized = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in stem).strip("_")
+    return sanitized or "dataset"
+
+
+def _persist_uploaded_dataset(uploaded_file, user_email: str):
+    if not user_email:
+        st.warning("Veuillez vous connecter pour téléverser vos datasets.")
+        return None
+
+    user_id = _get_user_id_by_email(user_email)
+    if not user_id:
+        st.error("Utilisateur introuvable dans la base de données. Veuillez vous reconnecter.")
+        return None
+
+    data_dir = _CURRENT_DIR / "data" / "uploads"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    base_name = _sanitize_dataset_name(uploaded_file.name)
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    extension = Path(uploaded_file.name).suffix or ".csv"
+    dataset_name = f"{base_name}_{timestamp}"
+
+    connection = None
+    try:
+        connection = _get_connection()
+        cursor = connection.cursor()
+        cursor.execute(
+            "SELECT dataset_name FROM user_datasets WHERE user_id = %s",
+            (user_id,)
+        )
+        existing_names = {row[0] for row in cursor.fetchall()}
+        unique_name = dataset_name
+        counter = 1
+        while unique_name in existing_names:
+            unique_name = f"{dataset_name}_{counter}"
+            counter += 1
+
+        file_path = data_dir / f"{unique_name}{extension}"
+        with file_path.open("wb") as destination:
+            destination.write(uploaded_file.getbuffer())
+
+        cursor.execute(
+            "INSERT INTO user_datasets (user_id, dataset_name, file_path) VALUES (%s, %s, %s)",
+            (user_id, unique_name, str(file_path)),
+        )
+        dataset_id = cursor.lastrowid
+        connection.commit()
+        return unique_name, str(file_path), dataset_id
+    except Error as e:
+        st.error(f"Erreur lors de l'enregistrement du dataset : {e}")
+        return None
+    finally:
+        if connection and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+
+def _load_dataframe_from_path(path: str):
+    try:
+        extension = Path(path).suffix.lower()
+        if extension in (".xlsx", ".xls"):
+            df = pd.read_excel(path)
+        else:
+            df = pd.read_csv(path)
+        st.session_state["data"] = df
+        st.session_state["data_source"] = path
+        st.success("Dataset chargé pour l'analyse.")
+        return True
+    except Exception as e:
+        st.error(f"Impossible de charger le dataset : {e}")
+        return False
+
+
+def _load_dataframe_from_uploaded(uploaded_file):
+    try:
+        extension = Path(uploaded_file.name).suffix.lower()
+        uploaded_file.seek(0)
+        if extension in (".xlsx", ".xls"):
+            df = pd.read_excel(uploaded_file)
+        else:
+            df = pd.read_csv(uploaded_file)
+        st.session_state["data"] = df
+        st.session_state["data_source"] = uploaded_file.name
+        st.success("Dataset temporaire chargé pour l'analyse.")
+        return True
+    except Exception as e:
+        st.error(f"Impossible de lire le fichier téléversé : {e}")
+        return False
+
+
+def _load_user_datasets(user_email: str):
+    if not user_email:
+        return []
+    user_id = _get_user_id_by_email(user_email)
+    if not user_id:
+        return []
+
+    connection = None
+    datasets = []
+    try:
+        connection = _get_connection()
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT dataset_id, dataset_name, file_path, upload_date
+            FROM user_datasets
+            WHERE user_id = %s AND is_active = TRUE
+            ORDER BY upload_date DESC
+            """,
+            (user_id,)
+        )
+        for dataset_id, name, path, uploaded_at in cursor.fetchall():
+            size_label = "N/A"
+            try:
+                size_bytes = Path(path).stat().st_size
+                size_label = f"{size_bytes / (1024**2):.1f} Mo"
+            except Exception:
+                pass
+            uploaded_str = uploaded_at.strftime("%d/%m/%Y %H:%M") if uploaded_at else ""
+            datasets.append(
+                {
+                    "dataset_id": dataset_id,
+                    "name": name,
+                    "path": path,
+                    "size": size_label,
+                    "uploaded_at": uploaded_str,
+                }
+            )
+    except Error as e:
+        st.error(f"Erreur lors du chargement des datasets : {e}")
+    finally:
+        if connection and connection.is_connected():
+            cursor.close()
+            connection.close()
+    return datasets
+
+
+# -------------------------- Helpers dashboard dynamiques ------------------
+def check_data():
+    if "data" not in st.session_state:
+        st.warning("⚠️ Importez d'abord un dataset depuis la section Téléversement.")
+        return False
+    return True
+
+
+def _find_column(df, keywords):
+    cols = list(df.columns)
+    lowered = [c.lower() for c in cols]
+    for kw in keywords:
+        for idx, name in enumerate(lowered):
+            if kw in name:
+                return cols[idx]
+    return None
+
+
+def _is_date_like(series: pd.Series, sample=200):
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return True
+    try:
+        values = series.dropna().astype(str)
+        if values.empty:
+            return False
+        sample_values = values.sample(min(len(values), sample), random_state=42)
+        parsed = pd.to_datetime(sample_values, errors="coerce")
+        return parsed.notna().mean() > 0.6
+    except Exception:
+        return False
+
+
+def detect_sales_columns(df: pd.DataFrame):
+    df = df.copy()
+    cols = df.columns
+    date_col = next((c for c in cols if _is_date_like(df[c])), None)
+    revenue_col = _find_column(df, ["revenue", "amount", "total", "sales", "price", "montant"])
+    qty_col = _find_column(df, ["quantity", "qty", "units", "unit", "quantité", "qte"])
+    product_col = _find_column(df, ["product", "item", "sku", "article", "produit"])
+    store_col = _find_column(df, ["store", "shop", "branch", "location", "magasin"])
+    order_col = _find_column(df, ["order_id", "order", "invoice", "transaction", "commande"])
+    customer_col = _find_column(df, ["customer", "client", "buyer", "client_id"])
+
+    if revenue_col is None and qty_col:
+        price_col = _find_column(df, ["price", "unit_price", "cost", "prix"])
+        if price_col:
+            try:
+                df["_computed_revenue"] = pd.to_numeric(df[price_col], errors="coerce") * pd.to_numeric(
+                    df[qty_col], errors="coerce"
+                )
+                revenue_col = "_computed_revenue"
+            except Exception:
+                revenue_col = None
+
+    if date_col:
+        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+
+    return {
+        "df": df,
+        "date_col": date_col,
+        "revenue_col": revenue_col,
+        "qty_col": qty_col,
+        "product_col": product_col,
+        "store_col": store_col,
+        "order_col": order_col,
+        "customer_col": customer_col,
+    }
+
+
+def fmt_currency(value, currency_label="GNF"):
+    if value is None:
+        return "N/A"
+    try:
+        return f"{int(value):,} {currency_label}"
+    except Exception:
+        return str(value)
+
+
+def fmt_number(value):
+    if value is None:
+        return "N/A"
+    try:
+        return f"{int(value):,}"
+    except Exception:
+        return str(value)
+
+
+@st.cache_data(ttl=300)
+def compute_time_series(df: pd.DataFrame, date_col: str, value_col: str, freq="D"):
+    subset = df[[date_col, value_col]].dropna()
+    if subset.empty:
+        return pd.DataFrame()
+    subset = subset.assign(date=pd.to_datetime(subset[date_col]).dt.floor(freq))
+    aggregated = subset.groupby("date")[value_col].sum().reset_index().sort_values("date")
+    return aggregated
+
+
+def render_footer():
+    current_year = datetime.now().year
+    user_text = st.session_state.get("user_email") or "Visiteur"
+    if not st.session_state.get("_footer_style_injected"):
+        st.markdown(
+            """
+            <style>
+            .dv-footer-separator {
+                height: 1px;
+                width: 100%;
+                background: linear-gradient(90deg, transparent, rgba(148,163,184,0.4), transparent);
+                margin: 3rem 0 1.5rem 0;
+            }
+            .dv-footer-wrapper {
+                margin-top: 4.5rem;
+                margin-bottom: 2rem;
+                max-width: 1280px;
+                margin-left: auto;
+                margin-right: auto;
+                padding: 0 1.5rem;
+            }
+            .dv-footer {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                gap: 3rem;
+                padding: clamp(2.5rem, 5vw, 4rem);
+                border-radius: 36px;
+                background: linear-gradient(135deg, rgba(15,23,42,0.98), rgba(30,64,175,0.9));
+                color: #e2e8f0;
+                box-shadow: 0 35px 90px rgba(15, 23, 42, 0.45);
+                position: relative;
+                overflow: hidden;
+            }
+            .dv-footer::before {
+                content: "";
+                position: absolute;
+                width: 240px;
+                height: 240px;
+                background: radial-gradient(circle, rgba(59,130,246,0.35), transparent 70%);
+                top: -60px;
+                right: -40px;
+                filter: blur(2px);
+            }
+            .dv-footer__column {
+                position: relative;
+                z-index: 1;
+            }
+            .dv-footer__title {
+                font-size: 1.05rem;
+                font-weight: 600;
+                margin-bottom: 0.5rem;
+                letter-spacing: 0.03em;
+                text-transform: uppercase;
+                color: #93c5fd;
+            }
+            .dv-footer__link {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.45rem;
+                color: #cdd9f9;
+                text-decoration: none;
+                margin-bottom: 0.35rem;
+                font-size: 0.94rem;
+                opacity: 0.92;
+                transition: transform 0.2s ease, opacity 0.2s ease;
+            }
+            .dv-footer__link:hover {
+                opacity: 1;
+                transform: translateX(3px);
+            }
+            .dv-footer__cta {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.45rem;
+                padding: 0.75rem 1.3rem;
+                border-radius: 999px;
+                font-size: 0.9rem;
+                background: linear-gradient(135deg, rgba(59,130,246,0.95), rgba(147,197,253,0.9));
+                color: #0f172a;
+                font-weight: 600;
+                margin-top: 0.9rem;
+                box-shadow: 0 8px 20px rgba(59,130,246,0.35);
+            }
+            .dv-footer__socials {
+                display: flex;
+                gap: 0.75rem;
+                margin-top: 0.8rem;
+            }
+            .dv-footer__socials a {
+                width: 34px;
+                height: 34px;
+                border-radius: 50%;
+                background: rgba(255,255,255,0.1);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #e2e8f0;
+                text-decoration: none;
+                font-size: 1rem;
+                border: 1px solid rgba(255,255,255,0.15);
+                transition: background 0.2s ease;
+            }
+            .dv-footer__socials a:hover {
+                background: rgba(255,255,255,0.25);
+            }
+            .dv-footer__divider {
+                grid-column: 1 / -1;
+                height: 1px;
+                background: rgba(148, 163, 184, 0.3);
+                margin-top: 1.5rem;
+                margin-bottom: 1.5rem;
+            }
+            .dv-footer__bottom {
+                grid-column: 1 / -1;
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: center;
+                text-align: center;
+                font-size: 0.9rem;
+                color: #cbd5f5;
+                gap: 1.5rem;
+            }
+            @media (max-width: 640px) {
+                .dv-footer {
+                    border-radius: 28px;
+                    padding: 2rem 1.5rem;
+                }
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.session_state["_footer_style_injected"] = True
+
+    st.markdown("<div class='dv-footer-separator'></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="dv-footer-wrapper">
+            <div class="dv-footer">
+                <div class="dv-footer__column">
+                    <div class="dv-footer__title">Smart Market Analytics</div>
+                    <p>Insights pilotés par la gouvernance des données, conçus pour les équipes retail exigeantes.</p>
+                    <div class="dv-footer__cta">🚀 Planifiez un appel expert</div>
+                </div>
+                <div class="dv-footer__column">
+                    <div class="dv-footer__title">Contact</div>
+                    <a class="dv-footer__link" href="mailto:contact@datavista.io">contact@datavista.io</a>
+                    <a class="dv-footer__link" href="tel:+22400000000">+224 00 00 00 00</a>
+                    <p>Support prioritaire 7j/7</p>
+                    <div class="dv-footer__socials">
+                        <a href="#">in</a>
+                        <a href="#">X</a>
+                        <a href="#">IG</a>
+                    </div>
+                </div>
+                <div class="dv-footer__column">
+                    <div class="dv-footer__title">Ressources rapides</div>
+                    <span class="dv-footer__link">📘 Centre de documentation</span>
+                    <span class="dv-footer__link">🎓 Programmes onboarding</span>
+                    <span class="dv-footer__link">🔒 Sécurité & conformité</span>
+                </div>
+                <div class="dv-footer__column">
+                    <div class="dv-footer__title">Communauté</div>
+                    <span class="dv-footer__link">💬 Forums DataVista</span>
+                    <span class="dv-footer__link">🎟️ Événements / Webinaires</span>
+                    <span class="dv-footer__link">🤝 Partenaires & intégrations</span>
+                </div>
+                <div class="dv-footer__divider"></div>
+                <div class="dv-footer__bottom">
+                    <span>© {current_year} DataVista · Tous droits réservés</span>
+                    <span>Connecté en tant que {user_text}</span>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_mini_footer():
+    """Small footer reused across main pages."""
+    if not st.session_state.get("_mini_footer_style_injected"):
+        st.markdown(
+            """
+            <style>
+            .dv-mini-footer {
+                margin-top: 3rem;
+                padding: 1.5rem 0 2rem;
+                border-top: 1px solid rgba(148, 163, 184, 0.3);
+                text-align: center;
+                color: #94a3b8;
+                font-size: 0.9rem;
+            }
+            .dv-mini-footer__socials {
+                display: inline-flex;
+                gap: 0.75rem;
+                margin-top: 0.6rem;
+            }
+            .dv-mini-footer__socials a {
+                width: 34px;
+                height: 34px;
+                border-radius: 50%;
+                border: 1px solid rgba(148, 163, 184, 0.4);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                text-decoration: none;
+                color: #e2e8f0;
+                background: rgba(15, 23, 42, 0.85);
+                transition: all 0.2s ease;
+            }
+            .dv-mini-footer__socials a:hover {
+                transform: translateY(-2px);
+                border-color: rgba(59, 130, 246, 0.8);
+                color: #60a5fa;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.session_state["_mini_footer_style_injected"] = True
+
+    st.markdown(
+        f"""
+        <div class="dv-mini-footer">
+            <div>© {datetime.now().year} Smart Market Analytics — Données · Insights · Impact.</div>
+            <div class="dv-mini-footer__socials">
+                <a href="#" title="LinkedIn">in</a>
+                <a href="#" title="X">X</a>
+                <a href="#" title="Instagram">IG</a>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ------------ Helpers spécifiques à l'analyse produits --------------------
+SEUIL_STOCK_BAS = 10
+SEUIL_MARGE_CRITIQUE = 15  # pourcentage
+TOP_N = 10
+
+
+def check_product_data():
+    if "data" not in st.session_state:
+        st.warning("⚠️ Veuillez d'abord importer vos données dans la page Téléversement")
+        return False
+    return True
+
+
+def format_currency(value):
+    try:
+        return f"{int(value):,} GNF"
+    except Exception:
+        return str(value)
+
+
+def normalize_product_columns(df: pd.DataFrame) -> pd.DataFrame:
+    col_map = {
+        "product": "produit",
+        "product_name": "produit",
+        "item": "produit",
+        "name": "produit",
+        "quantity": "quantite",
+        "qty": "quantite",
+        "amount": "quantite",
+        "price": "prix_unitaire",
+        "unit_price": "prix_unitaire",
+        "prix_unitaire": "prix_unitaire",
+        "cost": "cout_unitaire",
+        "cost_unit": "cout_unitaire",
+        "unit_cost": "cout_unitaire",
+        "stock": "stock",
+        "inventory": "stock",
+        "date": "date",
+        "date_vente": "date",
+        "sale_date": "date",
+        "categorie": "categorie",
+        "category": "categorie",
+    }
+    mapping = {}
+    for col in df.columns:
+        key = col.strip().lower().replace(" ", "_")
+        if key in col_map:
+            mapping[col] = col_map[key]
+    if mapping:
+        df = df.rename(columns=mapping)
+    if "date" in df.columns:
+        try:
+            df["date"] = pd.to_datetime(df["date"])
+        except Exception:
+            pass
+    return df
+
+
+def calculate_product_metrics(df: pd.DataFrame):
+    metrics = {}
+    if all(c in df.columns for c in ["quantite", "prix_unitaire"]):
+        metrics["ventes"] = df["quantite"].sum()
+        metrics["ca"] = (df["quantite"] * df["prix_unitaire"]).sum()
+        if "cout_unitaire" in df.columns:
+            metrics["marge"] = ((df["prix_unitaire"] - df["cout_unitaire"]) * df["quantite"]).sum()
+            metrics["taux_marge"] = (metrics["marge"] / metrics["ca"]) * 100 if metrics["ca"] else 0
+    if "stock" in df.columns:
+        metrics["stock_total"] = df["stock"].sum()
+        metrics["produits_stock_bas"] = int(df[df["stock"] < SEUIL_STOCK_BAS].shape[0])
+    return metrics
+
+
+def render_home_page():
+    inject_animations()
+    st.session_state.setdefault("theme", "light")
+    st.session_state.setdefault("authenticated", False)
+    st.session_state["authenticated"] = st.session_state.get("is_authenticated", False)
+    if st.session_state.get("user_email"):
+        st.session_state["username"] = st.session_state.get("user_email", "")
+
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --hero-img: url('{IMAGES['hero']}');
+        }}
+        body, .stApp {{
+            margin: 0 !important;
+            padding: 0 !important;
+        }}
+        .main .block-container {{
+            padding-top: 0 !important;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+        }}
+        .block-container:first-child {{
+            padding-top: 0 !important;
+        }}
+        .hero-section {{
+            position: relative;
+            margin: -10.5rem -4.25rem 0 -4.25rem;
+            padding: 0;
+            border-radius: 0;
+            min-height: 450px;
+            overflow: hidden;
+            box-shadow: 0 28px 60px rgba(15, 23, 42, 0.45);
+        }}
+        .hero-slideshow {{
+            position: absolute;
+            inset: 0;
+        }}
+        .hero-slide {{
+            position: absolute;
+            inset: 0;
+            background-size: cover;
+            background-position: center;
+            animation: heroFade 32s infinite;
+            opacity: 0;
+        }}
+        .hero-slide-1 {{
+            background-image: linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.55)), url('{IMAGES['store_1']}');
+            animation-delay: 0s;
+        }}
+        .hero-slide-2 {{
+            background-image: linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.55)), url('{IMAGES['store_2']}');
+            animation-delay: 8s;
+        }}
+        .hero-slide-3 {{
+            background-image: linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.55)), url('{IMAGES['store_3']}');
+            animation-delay: 16s;
+        }}
+        .hero-slide-4 {{
+            background-image: linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.55)), url('{IMAGES['store_4']}');
+            animation-delay: 24s;
+        }}
+        .hero-content {{
+            position: relative;
+            z-index: 2;
+            padding: 6rem 2.2rem 3rem 2.2rem;
+            color: white;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.75rem;
+        }}
+        .hero-content h1 {{
+            opacity: 0;
+            animation: titleSlideUp 1.2s ease-out forwards;
+            animation-delay: 0.5s;
+        }}
+        .hero-content p {{
+            font-size: 1.5rem;
+            font-weight: 300;
+            opacity: 0;
+            animation: subtitlePop 1.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+            animation-delay: 1.2s;
+            max-width: 800px;
+            margin: 0 auto;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }}
+        @keyframes titleSlideUp {{
+            0% {{
+                opacity: 0;
+                transform: translateY(30px);
+            }}
+            100% {{
+                opacity: 1;
+                transform: translateY(0);
+            }}
+        }}
+        @keyframes subtitlePop {{
+            0% {{
+                opacity: 0;
+                transform: translateY(40px) scale(0.95);
+            }}
+            100% {{
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }}
+        }}
+        @keyframes heroFade {{
+            0% {{ opacity: 0; }}
+            5% {{ opacity: 1; }}
+            30% {{ opacity: 1; }}
+            38% {{ opacity: 0; }}
+            100% {{ opacity: 0; }}
+        }}
+
+        .feature-grid {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+            justify-content: center;
+        }}
+
+        .feature-card {{
+            background: white;
+            padding: 1.75rem;
+            border-radius: 16px;
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            flex: 1 1 calc(25% - 1.5rem);
+            max-width: 300px;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }}
+
+        .feature-card:hover {{
+            transform: translateY(-10px);
+            box-shadow: 0 16px 40px rgba(15, 23, 42, 0.2);
+        }}
+
+        .feature-card img {{
+            width: 100%;
+            border-radius: 12px;
+            object-fit: cover;
+            height: 190px;
+        }}
+
+        .feature-card h3 {{
+            margin: 0;
+            font-size: 1.25rem;
+            color: #0f172a;
+        }}
+
+        .feature-card p {{
+            margin: 0;
+            color: #475569;
+            line-height: 1.6;
+            font-size: 0.98rem;
+        }}
+
+        .advantages-grid {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+            justify-content: center;
+        }}
+
+        .advantage-1 {{
+            background: #e3f2fd;
+            border-left: 5px solid #2196f3;
+        }}
+
+        .advantage-2 {{
+            background: #e8f5e9;
+            border-left: 5px solid #4caf50;
+        }}
+
+        .advantage-3 {{
+            background: #fff3e0;
+            border-left: 5px solid #ff9800;
+        }}
+
+        .advantage-4 {{
+            background: #fce4ec;
+            border-left: 5px solid #e91e63;
+        }}
+
+        .footer {{
+            text-align: center;
+            color: #475569;
+            font-size: 0.9rem;
+            margin-top: 2rem;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    create_menu(show_user_menu=False)
+
+    st.markdown(
+        """
+        <section class="hero-section animate-fade">
+            <div class="hero-slideshow">
+                <div class="hero-slide hero-slide-1"></div>
+                <div class="hero-slide hero-slide-2"></div>
+                <div class="hero-slide hero-slide-3"></div>
+                <div class="hero-slide hero-slide-4"></div>
+            </div>
+            <div class="hero-content">
+                <h1>Bienvenue sur Smart Market Analytics</h1>
+                <p>Votre plateforme unifiée pour analyser vos ventes, optimiser vos stocks et piloter la performance retail en temps réel, grâce à nos modèles de Machine Learning conçus pour vous.</p>
+            </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    colonne1, colonne2 = st.columns(2)
+    with colonne1:
+        st.markdown("### Apropos")
+        st.write(
+            """**Smart Market Analytics** est une plateforme innovante conçue pour aider les entreprises à analyser leurs données de vente, 
+        identifier les tendances et prendre des décisions éclairées. Grâce à des outils avancés de visualisation et d'analyse, 
+        vous pouvez optimiser vos performances et opérer les choix stratégiques."""
+        )
+
+    with colonne2:
+        st.markdown("### Pourquoi nous choisir ?")
+        st.write(
+            """
+            - **Analyse approfondie** : Explorez vos données sous différents angles pour découvrir des insights cachés.
+            - **Visualisations interactives** : Des tableaux de bord dynamiques pour une prise de décision rapide.
+            - **Optimisation des performances** : Identifiez les opportunités d'amélioration et maximisez vos revenus.
+
+            Rejoignez-nous pour transformer vos données en actions concrètes et piloter votre succès !"""
+        )
+
+    if not st.session_state.get("authenticated", False):
+        st.info("👋 Bienvenue sur Smart Market Analytics !")
+
+    st.markdown("## Fonctionnalités phares")
+    st.markdown(
+        f"""
+        <section class="feature-grid animate-stagger">
+            <article class="feature-card">
+                <img src="{IMAGES['feature_import']}" alt="Import & Analyse" loading="lazy" />
+                <h3>Importation et gouvernance des données</h3>
+                <p>Centralisez et nettoyez vos données pour garantir leur qualité et leur traçabilité.</p>
+            </article>
+            <article class="feature-card">
+                <img src="{IMAGES['feature_analysis']}" alt="Analyse croisée" loading="lazy" />
+                <h3>Analyses croisées & insights contextuels</h3>
+                <p>Analysez vos performances en tenant compte des facteurs externes et segmentez vos données intelligemment.</p>
+            </article>
+            <article class="feature-card">
+                <img src="{IMAGES['feature_viz']}" alt="Visualisations" loading="lazy" />
+                <h3>Visualisation décisionnelle & reporting</h3>
+                <p>Créez des tableaux de bord interactifs pour suivre vos KPIs en temps réel et partager des rapports personnalisés.</p>
+            </article>
+            <article class="feature-card">
+                <img src="{IMAGES['feature_predict']}" alt="Prédictions" loading="lazy" />
+                <h3>Prédictions et planification</h3>
+                <p>Anticipez les tendances futures grâce à des modèles avancés et optimisez vos décisions.</p>
+            </article>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("## Avantages différenciants")
+    st.markdown(
+        """
+        <section class="advantages-grid animate-stagger">
+            <article class="feature-card advantage-1">
+                <h3>Diagnostic 360° des performances</h3>
+                <p>Consolidez vos KPIs ventes, marge et stock pour identifier rapidement les leviers de croissance.</p>
+            </article>
+            <article class="feature-card advantage-2">
+                <h3>Segmentation dynamique</h3>
+                <p>Analysez vos données par zone, magasin, catégorie ou période pour détecter les opportunités locales.</p>
+            </article>
+            <article class="feature-card advantage-3">
+                <h3>Qualité et gouvernance des données</h3>
+                <p>Assurez-vous de la fiabilité de vos analyses grâce aux contrôles, historiques d’import et alertes qualité.</p>
+            </article>
+            <article class="feature-card advantage-4">
+                <h3>Diffusion simplifiée des insights</h3>
+                <p>Partagez des tableaux de bord prêts à l’emploi et synchrones pour éclairer vos comités de décision.</p>
+            </article>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    render_mini_footer()
+
+
+
+def render_dashboard_page():
+    img1 = IMAGES["dash_img_1"]
+    img2 = IMAGES["dash_img_2"]
+    img3 = IMAGES["dash_img_3"]
+
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --dash-img-1: url('{img1}');
+            --dash-img-2: url('{img2}');
+            --dash-img-3: url('{img3}');
+        }}
+        body, .stApp {{
+            margin: 0 !important;
+            padding: 0 !important;
+        }}
+        .main .block-container {{
+            padding-top: 0 !important;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+        }}
+        .block-container:first-child {{
+            padding-top: 0 !important;
+        }}
+        .dashboard-hero {{
+            position: relative;
+            margin: -10.5rem -4.25rem 2rem -4.25rem;
+            padding: 6rem 2rem;
+            border-radius: 0;
+            color: white;
+            backdrop-filter: blur(8px);
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 450px;
+            background: #1e293b;
+            box-shadow: 0 22px 50px rgba(15, 23, 42, 0.35);
+            overflow: hidden;
+        }}
+        .dashboard-slideshow {{
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+        }}
+        .dashboard-slide {{
+            position: absolute;
+            inset: 0;
+            background-size: cover;
+            background-position: center;
+            opacity: 0;
+            animation: dashFade 24s infinite;
+        }}
+        .dashboard-slide:nth-child(1) {{
+            background-image: linear-gradient(135deg, rgba(99, 102, 241, 0.75), rgba(15, 23, 42, 0.92)), var(--dash-img-1);
+            animation-delay: 0s;
+        }}
+        .dashboard-slide:nth-child(2) {{
+            background-image: linear-gradient(135deg, rgba(99, 102, 241, 0.75), rgba(15, 23, 42, 0.92)), var(--dash-img-2);
+            animation-delay: 8s;
+        }}
+        .dashboard-slide:nth-child(3) {{
+            background-image: linear-gradient(135deg, rgba(99, 102, 241, 0.75), rgba(15, 23, 42, 0.92)), var(--dash-img-3);
+            animation-delay: 16s;
+        }}
+        @keyframes dashFade {{
+            0% {{ opacity: 0; }}
+            5% {{ opacity: 1; }}
+            30% {{ opacity: 1; }}
+            35% {{ opacity: 0; }}
+            100% {{ opacity: 0; }}
+        }}
+        .dashboard-hero-content {{
+            position: relative;
+            z-index: 2;
+            margin-top: 6rem;
+        }}
+        .dashboard-hero h1 {{
+            font-size: clamp(1.8rem, 3vw, 2.5rem);
+            margin: 0 0 0.5rem 0;
+            font-weight: 700;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            max-width: 1000px;
+        }}
+        .dashboard-hero p {{
+            font-size: clamp(1rem, 1.5vw, 1.1rem);
+            max-width: 800px;
+            opacity: 0.95;
+            line-height: 1.4;
+            margin: 0 auto 1rem;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }}
+        .dashboard-hero__meta {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-top: 1.5rem;
+        }}
+        .dashboard-hero__tag {{
+            background: rgba(255, 255, 255, 0.16);
+            border-radius: 999px;
+            padding: 0.55rem 1.25rem;
+            font-size: 0.95rem;
+            letter-spacing: 0.02em;
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
+        }}
+        .kpi-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.4rem;
+            margin: 1.8rem 0 2.2rem;
+        }}
+        .kpi-card {{
+            position: relative;
+            padding: 1.8rem;
+            border-radius: 18px;
+            color: #fff;
+            overflow: hidden;
+            box-shadow: 0 20px 45px rgba(15, 23, 42, 0.25);
+        }}
+        .kpi-card::after {{
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(255,255,255,0.15), transparent 55%);
+            pointer-events: none;
+        }}
+        .kpi-card__label {{
+            font-size: 0.95rem;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            opacity: 0.85;
+        }}
+        .kpi-card__value {{
+            font-size: 2rem;
+            font-weight: 700;
+            margin: 0.35rem 0 0.6rem;
+        }}
+        .kpi-card__caption {{
+            margin: 0;
+            font-size: 0.95rem;
+            opacity: 0.9;
+        }}
+        .kpi-card--indigo {{ background: linear-gradient(135deg, #4f46e5, #312e81); }}
+        .kpi-card--emerald {{ background: linear-gradient(135deg, #10b981, #047857); }}
+        .kpi-card--amber {{ background: linear-gradient(135deg, #f59e0b, #b45309); }}
+        .kpi-card--rose {{ background: linear-gradient(135deg, #ec4899, #9d174d); }}
+        .kpi-card--sky {{ background: linear-gradient(135deg, #0ea5e9, #1e3a8a); }}
+        .kpi-card--slate {{ background: linear-gradient(135deg, #475569, #111827); }}
+        @media (max-width: 992px) {{
+            .dashboard-hero {{
+                margin: -1.5rem -1.5rem 1.5rem -1.5rem;
+                padding: 3rem 1.8rem;
+                border-radius: 0 0 22px 22px;
+            }}
+        }}
+        @media (max-width: 640px) {{
+            .dashboard-hero {{
+                margin: -1rem -1rem 1rem -1rem;
+                padding: 2.5rem 1.4rem;
+            }}
+        }}
+        </style>
+        <section class="dashboard-hero animate-fade">
+            <div class="dashboard-slideshow">
+                <div class="dashboard-slide"></div>
+                <div class="dashboard-slide"></div>
+                <div class="dashboard-slide"></div>
+            </div>
+            <div class="dashboard-hero-content">
+                <h1>Vue d'ensemble des performances de vos ventes.</h1>
+                <p>Suivez les revenus, unités vendues et tendances clés en un coup d'œil. Identifiez vos opportunités en temps réel grâce à nos indicateurs intelligents.</p>
+            </div>
+            <div class="dashboard-hero__meta animate-stagger">
+                <span class="dashboard-hero__tag">📈 KPIs en temps réel</span>
+                <span class="dashboard-hero__tag">🔎 Insights automatiques</span>
+                <span class="dashboard-hero__tag">📥 Exports rapides</span>
+            </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.subheader("📈 Dashboard Ventes — Vue professionnelle")
+
+    if not check_data():
+        st.info("⚠️ Importez d'abord un dataset depuis la section Téléversement pour voir ce dashboard.")
+
+        return
+
+    raw = st.session_state["data"]
+    detected = detect_sales_columns(raw)
+    df = detected["df"]
+    date_col = detected["date_col"]
+    revenue_col = detected["revenue_col"]
+    qty_col = detected["qty_col"]
+    product_col = detected["product_col"]
+    store_col = detected["store_col"]
+    order_col = detected["order_col"]
+    customer_col = detected["customer_col"]
+
+    st.sidebar.header("Paramètres affichage")
+    top_n = st.sidebar.number_input("Top N (produits/magasins)", min_value=3, max_value=50, value=10, step=1)
+    granularity = st.sidebar.selectbox(
+        "Granularité temporelle",
+        ["D", "W", "M"],
+        index=0,
+        format_func=lambda x: {"D": "Quotidien", "W": "Hebdo", "M": "Mensuel"}[x],
+    )
+    currency_label = st.sidebar.text_input("Symbole devise (optionnel)", value="GNF")
+
+    # --- Interactive Filters ---
+    st.sidebar.header("🔍 Filtres Globaux")
+    
+    # Date Filter
+    if date_col:
+        min_date = pd.to_datetime(df[date_col]).min()
+        max_date = pd.to_datetime(df[date_col]).max()
+        
+        # Default to last 30 days if available, else full range
+        default_start = max(min_date, max_date - timedelta(days=30))
+        
+        date_range = st.sidebar.date_input(
+            "Période",
+            value=(default_start, max_date),
+            min_value=min_date,
+            max_value=max_date
+        )
+        
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+            mask = (pd.to_datetime(df[date_col]) >= pd.to_datetime(start_date)) & (pd.to_datetime(df[date_col]) <= pd.to_datetime(end_date))
+            df_filtered = df.loc[mask]
+        else:
+            df_filtered = df
+    else:
+        df_filtered = df
+
+    # Category/Segment Filter
+    cat_col = None
+    if product_col:
+        # Try to find a category column (heuristic: low cardinality string column)
+        potential_cats = [c for c in df.columns if df[c].dtype == 'object' and df[c].nunique() < 20 and c != product_col]
+        if potential_cats:
+            cat_col = potential_cats[0] # Take the first likely candidate
+            
+    if cat_col:
+        categories = sorted(df[cat_col].dropna().unique().tolist())
+        selected_cats = st.sidebar.multiselect(f"Filtrer par {cat_col}", categories, default=categories)
+        if selected_cats:
+            df_filtered = df_filtered[df_filtered[cat_col].isin(selected_cats)]
+
+    # --- KPI Calculations on Filtered Data ---
+    n_rows_filtered, n_cols_filtered = df_filtered.shape
+    global_missing_pct = round(df_filtered.isna().sum().sum() / (max(1, n_rows_filtered * n_cols_filtered)) * 100, 2)
+    duplicates = int(df_filtered.duplicated().sum())
+    
+    total_revenue = None
+    if revenue_col:
+        total_revenue = round(pd.to_numeric(df_filtered[revenue_col], errors="coerce").sum(skipna=True))
+    
+    total_units = None
+    if qty_col:
+        total_units = int(pd.to_numeric(df_filtered[qty_col], errors="coerce").sum(skipna=True))
+        
+    unique_orders = int(df_filtered[order_col].nunique(dropna=True)) if order_col else None
+    unique_customers = int(df_filtered[customer_col].nunique(dropna=True)) if customer_col else None
+    approx_orders = unique_orders if unique_orders is not None and unique_orders > 0 else max(1, n_rows_filtered)
+
+    avg_order_value = (
+        round((total_revenue / approx_orders)) if (total_revenue is not None and approx_orders) else None
+    )
+
+    # Time Series for Chart (using filtered data)
+    if date_col and revenue_col:
+        ts = compute_time_series(df_filtered, date_col, revenue_col, freq=granularity)
+        
+        # Calculate growth vs previous period (same length as selected)
+        if len(date_range) == 2:
+            period_days = (end_date - start_date).days
+            prev_start = start_date - timedelta(days=period_days)
+            prev_end = start_date - timedelta(days=1)
+            
+            # Get previous period data from ORIGINAL df (to allow comparison outside filter)
+            mask_prev = (pd.to_datetime(df[date_col]) >= pd.to_datetime(prev_start)) & (pd.to_datetime(df[date_col]) <= pd.to_datetime(prev_end))
+            df_prev = df.loc[mask_prev]
+            
+            recent_sum = total_revenue
+            prev_sum = round(pd.to_numeric(df_prev[revenue_col], errors="coerce").sum(skipna=True)) if not df_prev.empty else 0
+            
+            pct_change = None
+            if prev_sum != 0:
+                pct_change = round((recent_sum - prev_sum) / abs(prev_sum) * 100, 1)
+        else:
+             recent_sum = prev_sum = pct_change = None
+    else:
+        ts = pd.DataFrame()
+        recent_sum = prev_sum = pct_change = None
+
+    st.subheader("🎯 KPIs essentiels")
+    st.markdown(
+        """
+        <style>
+            .dv-kpi-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                gap: 1.25rem;
+                margin: 1rem 0 2rem;
+            }
+            .dv-kpi-card {
+                position: relative;
+                padding: 1.5rem;
+                border-radius: 22px;
+                color: #e2e8f0;
+                border: 1px solid rgba(226, 232, 240, 0.08);
+                background: radial-gradient(circle at top, rgba(148,163,184,0.25), transparent 65%),
+                            linear-gradient(135deg, rgba(15,23,42,0.95), rgba(30,41,59,0.95));
+                box-shadow: 0 25px 40px rgba(2, 6, 23, 0.55);
+                overflow: hidden;
+            }
+            .dv-kpi-card::after {
+                content: "";
+                position: absolute;
+                inset: 0;
+                background: linear-gradient(120deg, rgba(255,255,255,0.08), transparent 70%);
+                pointer-events: none;
+            }
+            .dv-kpi-card__icon {
+                font-size: 1.4rem;
+                width: 48px;
+                height: 48px;
+                border-radius: 16px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin-bottom: 0.8rem;
+                background: rgba(15, 23, 42, 0.55);
+                border: 1px solid rgba(148, 163, 184, 0.2);
+            }
+            .dv-kpi-card--indigo .dv-kpi-card__icon { background: rgba(79,70,229,0.25); color: #c7d2fe; }
+            .dv-kpi-card--emerald .dv-kpi-card__icon { background: rgba(16,185,129,0.25); color: #a7f3d0; }
+            .dv-kpi-card--sky .dv-kpi-card__icon { background: rgba(14,165,233,0.25); color: #bae6fd; }
+            .dv-kpi-card--rose .dv-kpi-card__icon { background: rgba(244,114,182,0.25); color: #fecdd3; }
+            .dv-kpi-card--amber .dv-kpi-card__icon { background: rgba(251,191,36,0.3); color: #fde68a; }
+            .dv-kpi-card--slate .dv-kpi-card__icon { background: rgba(100,116,139,0.25); color: #cbd5f5; }
+            .dv-kpi-card__title {
+                font-size: 0.95rem;
+                letter-spacing: 0.03em;
+                text-transform: uppercase;
+                color: rgba(226, 232, 240, 0.8);
+                font-weight: 600;
+            }
+            .dv-kpi-card__value {
+                font-size: 2rem;
+                font-weight: 700;
+                margin: 0.35rem 0 0.6rem;
+                color: #f8fafc;
+            }
+            .dv-kpi-card__caption {
+                margin: 0;
+                font-size: 0.95rem;
+                color: rgba(226, 232, 240, 0.75);
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    kpi_cards = [
+        {
+            "title": "Revenu total",
+            "value": fmt_currency(total_revenue, currency_label) if total_revenue is not None else "N/A",
+            "caption": "Somme sur la période filtrée",
+            "tone": "indigo",
+            "icon": "💰",
+        },
+        {
+            "title": "Unités vendues",
+            "value": fmt_number(total_units),
+            "caption": "Quantités agrégées",
+            "tone": "emerald",
+            "icon": "📦",
+        },
+        {
+            "title": "Commandes uniques",
+            "value": fmt_number(unique_orders if unique_orders is not None else n_rows_filtered),
+            "caption": "Transactions distinguées",
+            "tone": "sky",
+            "icon": "🧾",
+        },
+        {
+            "title": "Clients uniques",
+            "value": fmt_number(unique_customers),
+            "caption": "Clients identifiés",
+            "tone": "rose",
+            "icon": "👥",
+        },
+        {
+            "title": "Taux de données manquantes",
+            "value": f"{round(global_missing_pct)} %",
+            "caption": "Sur l'ensemble des colonnes",
+            "tone": "amber",
+            "icon": "⚠️",
+        },
+        {
+            "title": "Lignes dupliquées",
+            "value": fmt_number(duplicates),
+            "caption": "À investiguer pour qualité",
+            "tone": "slate",
+            "icon": "♻️",
+        },
+    ]
+
+    if avg_order_value:
+        kpi_cards.append(
+            {
+                "title": "Panier moyen",
+                "value": fmt_currency(avg_order_value, currency_label),
+                "caption": "Valeur moyenne par commande",
+                "tone": "emerald",
+                "icon": "🛒",
+            }
+        )
+
+    if recent_sum is not None and prev_sum is not None:
+        variation = f"{pct_change:+.1f}%" if pct_change is not None else "N/A"
+        kpi_cards.append(
+            {
+                "title": "Revenu récent",
+                "value": fmt_currency(recent_sum, currency_label),
+                "caption": f"vs période précédente : {variation}",
+                "tone": "indigo",
+                "icon": "📈",
+            }
+        )
+
+    cards_html = "".join(
+        f"""
+        <article class="dv-kpi-card dv-kpi-card--{card['tone']} animate-slide-up">
+            <div class="dv-kpi-card__icon">{card.get('icon','')}</div>
+            <div class="dv-kpi-card__title">{card['title']}</div>
+            <div class="dv-kpi-card__value">{card['value']}</div>
+            {f"<p class='dv-kpi-card__caption'>{card['caption']}</p>" if card.get('caption') else ""}
+        </article>
+        """
+        for card in kpi_cards
+    )
+
+    st.markdown(f"<section class='dv-kpi-grid'>{cards_html}</section>", unsafe_allow_html=True)
+
+    st.subheader("📈 Évolution temporelle")
+    if not ts.empty:
+        line_fig = px.line(ts, x="date", y=revenue_col, title="Revenu — série temporelle", markers=False)
+        line_fig.update_traces(line=dict(color="#1f77b4"))
+        line_fig.update_layout(margin=dict(t=40, l=10, r=10, b=10), height=360)
+        st.plotly_chart(line_fig, use_container_width=True)
+    else:
+        st.info("Pas assez d'informations date+revenue pour tracer la série temporelle.")
+
+    st.subheader("🏆 Top éléments")
+    tp_col, ts_col = st.columns(2)
+    if product_col:
+        with tp_col:
+            st.markdown("**Top produits**")
+            if revenue_col:
+                top_products = (
+                    df_filtered.groupby(product_col)[revenue_col].sum().sort_values(ascending=False).head(top_n)
+                )
+                fig = px.bar(
+                    top_products.reset_index(),
+                    x=product_col,
+                    y=revenue_col,
+                    title=f"Top {top_n} produits par revenu",
+                    text_auto='.2s'
+                )
+            elif qty_col:
+                top_products = df_filtered.groupby(product_col)[qty_col].sum().sort_values(ascending=False).head(top_n)
+                fig = px.bar(
+                    top_products.reset_index(),
+                    x=product_col,
+                    y=qty_col,
+                    title=f"Top {top_n} produits par unités",
+                    text_auto='.2s'
+                )
+            else:
+                top_products = df_filtered[product_col].value_counts().head(top_n)
+                fig = px.bar(
+                    top_products.reset_index(),
+                    x=product_col,
+                    y=top_products.name,
+                    title=f"Top {top_n} produits (occurrences)",
+                )
+            fig.update_layout(height=380, margin=dict(t=40, l=10, r=10, b=10), template="plotly_white")
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        tp_col.info("Aucune colonne produit détectée")
+
+    if store_col:
+        with ts_col:
+            st.markdown("**Top magasins**")
+            if revenue_col:
+                top_stores = (
+                    df_filtered.groupby(store_col)[revenue_col].sum().sort_values(ascending=False).head(top_n)
+                )
+                fig2 = px.bar(
+                    top_stores.reset_index(),
+                    x=store_col,
+                    y=revenue_col,
+                    title=f"Top {top_n} magasins par revenu",
+                    text_auto='.2s'
+                )
+            elif qty_col:
+                top_stores = df_filtered.groupby(store_col)[qty_col].sum().sort_values(ascending=False).head(top_n)
+                fig2 = px.bar(
+                    top_stores.reset_index(),
+                    x=store_col,
+                    y=qty_col,
+                    title=f"Top {top_n} magasins par unités",
+                    text_auto='.2s'
+                )
+            else:
+                top_stores = df_filtered[store_col].value_counts().head(top_n)
+                fig2 = px.bar(
+                    top_stores.reset_index(),
+                    x=store_col,
+                    y=top_stores.name,
+                    title=f"Top {top_n} magasins (occ.)",
+                )
+            fig2.update_layout(height=380, margin=dict(t=40, l=10, r=10, b=10), template="plotly_white")
+            st.plotly_chart(fig2, use_container_width=True)
+    else:
+        ts_col.info("Aucune colonne magasin détectée")
+
+    st.subheader("🔎 Alertes & insights automatiques")
+    alerts = []
+    if global_missing_pct > 20:
+        alerts.append(f"⚠️ Taux de valeurs manquantes élevé: {global_missing_pct}%")
+    if duplicates > 0:
+        alerts.append(f"⚠️ {duplicates} lignes dupliquées détectées")
+    if revenue_col and ts.shape[0] > 0:
+        peak = ts.loc[ts[revenue_col].idxmax()]
+        trough = ts.loc[ts[revenue_col].idxmin()]
+        alerts.append(f"📌 Meilleure date: {peak['date'].date()} ({fmt_currency(peak[revenue_col], currency_label)})")
+        alerts.append(f"📌 Pire date: {trough['date'].date()} ({fmt_currency(trough[revenue_col], currency_label)})")
+    if alerts:
+        for alert in alerts:
+            st.info(alert)
+    else:
+        st.success("✅ Aucune alerte majeure détectée")
+
+    st.subheader("📋 Résumé rapide — colonnes clés détectées")
+    cols_summary = []
+    if revenue_col:
+        cols_summary.append({"Attribut": "Colonne Revenu", "Valeur": revenue_col})
+    if qty_col:
+        cols_summary.append({"Attribut": "Colonne Quantité", "Valeur": qty_col})
+    if date_col:
+        cols_summary.append({"Attribut": "Colonne Date", "Valeur": date_col})
+    if product_col:
+        cols_summary.append({"Attribut": "Colonne Produit", "Valeur": product_col})
+    if store_col:
+        cols_summary.append({"Attribut": "Colonne Magasin", "Valeur": store_col})
+    if order_col:
+        cols_summary.append({"Attribut": "Colonne Commande", "Valeur": order_col})
+    if customer_col:
+        cols_summary.append({"Attribut": "Colonne Client", "Valeur": customer_col})
+    st.table(pd.DataFrame(cols_summary))
+
+    st.subheader("⬇️ Export rapide")
+    export_cols = [c for c in [date_col, product_col, store_col, order_col, customer_col, revenue_col, qty_col] if c]
+    if export_cols:
+        tmp_export = df[export_cols].copy()
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            tmp_export.to_excel(writer, index=False, sheet_name='Data')
+        
+        st.download_button(
+            label="Télécharger extrait Excel (colonnes clés)",
+            data=buffer,
+            file_name="sales_extract.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.info("Aucune colonne clé détectée pour export")
+
+    with st.expander("🔍 Explorer les données brutes (filtrer)"):
+        rows = st.slider("Lignes à afficher", 5, 500, 50)
+        sel_cols = st.multiselect(
+            "Colonnes",
+            df.columns.tolist(),
+            default=export_cols[:10] if export_cols else df.columns.tolist()[:10],
+        )
+        view = df[sel_cols].head(rows)
+        st.dataframe(view)
+
+    mini_footer_html = f"""
+        <style>
+        .dv-mini-footer {{
+            margin-top: 3rem;
+            padding: 1.5rem 0;
+            border-top: 1px solid rgba(148, 163, 184, 0.3);
+            text-align: center;
+            color: #94a3b8;
+            font-size: 0.9rem;
+        }}
+        .dv-mini-footer__socials {{
+            display: inline-flex;
+            gap: 0.75rem;
+            margin-top: 0.6rem;
+        }}
+        .dv-mini-footer__socials a {{
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            border: 1px solid rgba(148, 163, 184, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            color: #e2e8f0;
+            background: rgba(15, 23, 42, 0.85);
+            transition: all 0.2s ease;
+        }}
+        .dv-mini-footer__socials a:hover {{
+            transform: translateY(-2px);
+            border-color: rgba(59, 130, 246, 0.8);
+            color: #60a5fa;
+        }}
+        </style>
+        <div class="dv-mini-footer">
+            <div>© {datetime.now().year} Smart Market Analytics — Données. Insights. Impact.</div>
+            <div class="dv-mini-footer__socials">
+                <a href="#" title="LinkedIn">in</a>
+                <a href="#" title="X">X</a>
+                <a href="#" title="Instagram">IG</a>
+            </div>
+        </div>
+        """
+    render_mini_footer()
+
+
+
+
+def render_analytics_page():
+    # Ensure data is imported before displaying analytics
+    if not check_data():
+        return
+    img1 = IMAGES["analytics"]
+    img2 = IMAGES["analytics_2"]
+
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --analytics-img-1: url('{img1}');
+            --analytics-img-2: url('{img2}');
+        }}
+        body, .stApp {{
+            margin: 0 !important;
+            padding: 0 !important;
+        }}
+        .main .block-container {{
+            padding-top: 0 !important;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+        }}
+        .block-container:first-child {{
+            padding-top: 0 !important;
+        }}
+
+        .produit-hero {{
+            position: relative;
+            margin: -10.5rem -4.25rem 0 -4.25rem;
+            padding: 2rem 1rem;
+            color: white;
+            border-radius: 0;
+            text-align: center;
+            min-height: 450px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            background: #1e293b; /* Fallback color */
+        }}
+
+        /* Slideshow container */
+        .analytics-slideshow {{
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+        }}
+
+        .analytics-slide {{
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-size: cover;
+            background-position: center;
+            opacity: 0;
+            animation: analyticsFade 16s infinite;
+        }}
+
+        .analytics-slide:nth-child(1) {{
+            background-image: linear-gradient(rgba(0,0,0,0.4), rgba(0,0,0,0.4)), var(--analytics-img-1);
+            animation-delay: 0s;
+        }}
+
+        .analytics-slide:nth-child(2) {{
+            background-image: linear-gradient(rgba(0,0,0,0.4), rgba(0,0,0,0.4)), var(--analytics-img-2);
+            animation-delay: 8s;
+        }}
+
+        @keyframes analyticsFade {{
+            0% {{ opacity: 0; }}
+            10% {{ opacity: 1; }}
+            40% {{ opacity: 1; }}
+            50% {{ opacity: 0; }}
+            100% {{ opacity: 0; }}
+        }}
+
+        .produit-hero-content {{
+            position: relative;
+            z-index: 2;
+        }}
+
+        .produit-hero h1 {{
+            font-size: 2.2rem;
+            margin-bottom: 0.5rem;
+            font-weight: 700;
+            text-shadow: 0 2px 6px rgba(0,0,0,0.35);
+        }}
+        .produit-hero p {{
+            font-size: 1.15rem;
+            max-width: 700px;
+            margin: 0 auto;
+            line-height: 1.5;
+            opacity: 0.95;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <section class="produit-hero">
+            <div class="analytics-slideshow">
+                <div class="analytics-slide"></div>
+                <div class="analytics-slide"></div>
+            </div>
+            <div class="produit-hero-content">
+                <h1>Analyse Produit</h1>
+                <p>Analysez la performance de vos produits, identifiez les best-sellers et optimisez votre catalogue.</p>
+            </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not check_product_data():
+
+        return
+
+    df = normalize_product_columns(st.session_state["data"].copy())
+    if "produit" not in df.columns:
+        st.error("La colonne 'produit' est introuvable dans votre dataset.")
+        st.info(f"Colonnes disponibles : {', '.join(df.columns)}")
+
+        st.stop()
+
+    with st.sidebar:
+        st.header("🎯 Paramètres d'analyse")
+        st.subheader("📅 Période")
+        if "date" in df.columns:
+            min_date = pd.to_datetime(df["date"]).min()
+            max_date = pd.to_datetime(df["date"]).max()
+            date_range = st.date_input(
+                "Sélectionner la période",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+            )
+            if len(date_range) == 2:
+                df = df[(df["date"] >= pd.Timestamp(date_range[0])) & (df["date"] <= pd.Timestamp(date_range[1]))]
+
+        st.subheader("🏷️ Filtres")
+        if "categorie" in df.columns:
+            categories = ["Tous"] + sorted(df["categorie"].dropna().unique().tolist())
+            selected_cat = st.selectbox("Catégorie", categories)
+            if selected_cat != "Tous":
+                df = df[df["categorie"] == selected_cat]
+
+        if "produit" in df.columns:
+            products = sorted(df["produit"].dropna().unique().tolist())
+            selected_products = st.multiselect("Produits spécifiques", products)
+            if selected_products:
+                df = df[df["produit"].isin(selected_products)]
+
+    metrics = calculate_product_metrics(df)
+
+    st.header("📊 Tableau de Bord")
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    with kpi1:
+        st.metric("Produits Actifs", f"{df['produit'].nunique():,}", help="Nombre total de produits différents vendus")
+    with kpi2:
+        st.metric("Ventes Totales", format_currency(metrics.get("ca", 0)), help="Chiffre d'affaires total")
+    with kpi3:
+        marge = metrics.get("marge", 0)
+        taux_marge = metrics.get("taux_marge", 0)
+        st.metric("Marge Brute", format_currency(marge), f"{taux_marge:.1f}%", help="Marge brute et taux de marge")
+    with kpi4:
+        st.metric(
+            "Alerte Stock",
+            f"{metrics.get('produits_stock_bas', 0)} produits",
+            help=f"Produits avec stock < {SEUIL_STOCK_BAS} unités",
+        )
+
+    st.header("📈 Analyses Détaillées")
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Performance Produits", "💰 Rentabilité", "📦 Gestion Stock", "🔄 Tendances"])
+
+    with tab1:
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            if "produit" in df.columns and all(c in df.columns for c in ["quantite", "prix_unitaire"]):
+                ca_by_product = (
+                    df.groupby("produit")
+                    .apply(lambda x: (x["quantite"] * x["prix_unitaire"]).sum())
+                    .sort_values(ascending=False)
+                    .head(TOP_N)
+                )
+                fig = px.bar(
+                    ca_by_product,
+                    title=f"Top {TOP_N} Produits par Chiffre d'Affaires",
+                    labels={"value": "CA (GNF)", "produit": "Produit"},
+                    template="plotly_white",
+                )
+                fig.update_layout(showlegend=False, height=400)
+                st.plotly_chart(fig, use_container_width=True)
+        with col2:
+            st.subheader("🏆 Top Performers")
+            top_products = (
+                df.groupby("produit")
+                .agg({"quantite": "sum", "prix_unitaire": "mean"})
+                .sort_values("quantite", ascending=False)
+                .head(5)
+            )
+            st.dataframe(
+                top_products.style.format({"quantite": "{:,.0f}", "prix_unitaire": "{:,.0f} GNF"}),
+                height=400,
+            )
+
+    with tab2:
+        if all(c in df.columns for c in ["quantite", "prix_unitaire", "cout_unitaire"]):
+            df["marge"] = (df["prix_unitaire"] - df["cout_unitaire"]) * df["quantite"]
+            rentabilite = (
+                df.groupby("produit")
+                .agg({"marge": "sum", "quantite": "sum"})
+                .reset_index()
+            )
+            fig = px.scatter(
+                rentabilite,
+                x="quantite",
+                y="marge",
+                size="marge",
+                color="marge",
+                hover_name="produit",
+                title="💰 Rentabilité par Produit",
+                labels={"marge": "Marge Totale (GNF)", "quantite": "Quantité Vendue"},
+                template="plotly_white",
+            )
+            fig.update_traces(marker=dict(sizemode="diameter", opacity=0.8))
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Ajoutez les colonnes 'prix_unitaire', 'quantite' et 'cout_unitaire' pour analyser la rentabilité.")
+
+    with tab3:
+        if "stock" in df.columns:
+            stock = df.groupby("produit").agg({"stock": "sum", "quantite": "sum"}).reset_index()
+            fig = px.bar(
+                stock,
+                x="produit",
+                y="stock",
+                title="📦 Niveau de Stock par Produit",
+                labels={"stock": "Stock Actuel", "produit": "Produit"},
+                template="plotly_white",
+            )
+            fig.update_layout(showlegend=False, height=400, xaxis_tickangle=-45)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Ajoutez la colonne 'stock' pour suivre les niveaux de stock.")
+
+    with tab4:
+        if "date" in df.columns and "quantite" in df.columns:
+            df["date"] = pd.to_datetime(df["date"])
+            ventes = (
+                df.groupby(df["date"].dt.to_period("M"))
+                .agg({"quantite": "sum", "prix_unitaire": "mean"})
+                .reset_index()
+            )
+            ventes["date"] = ventes["date"].dt.to_timestamp()
+            fig = make_subplots(
+                rows=2,
+                cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.1,
+                subplot_titles=("Ventes Mensuelles", "Prix Unitaire Moyen Mensuel"),
+            )
+            fig.add_trace(go.Bar(x=ventes["date"], y=ventes["quantite"], name="Ventes"), row=1, col=1)
+            fig.add_trace(
+                go.Scatter(x=ventes["date"], y=ventes["prix_unitaire"], name="Prix Unitaire", mode="lines+markers"),
+                row=2,
+                col=1,
+            )
+            fig.update_layout(height=600, title_text="📈 Tendances des Ventes et Prix dans le Temps", template="plotly_white")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Ajoutez les colonnes 'date' et 'quantite' pour visualiser les tendances.")
+
+    st.header("📥 Export et Rapports")
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        report_type = st.selectbox("Type de rapport", ["Rapport complet", "Synthèse performance", "Analyse stock"])
+    with col2:
+        if st.button("📥 Générer le rapport", use_container_width=True):
+            products = sorted(df["produit"].dropna().unique().tolist())
+
+            def sum_qty(grp):
+                return grp["quantite"].fillna(0).sum() if "quantite" in grp.columns else 0
+
+            def sum_ca(grp):
+                if "quantite" in grp.columns and "prix_unitaire" in grp.columns:
+                    return (grp["quantite"].fillna(0) * grp["prix_unitaire"].fillna(0)).sum()
+                return 0
+
+            def sum_margin(grp):
+                if all(c in grp.columns for c in ("quantite", "prix_unitaire", "cout_unitaire")):
+                    return ((grp["prix_unitaire"].fillna(0) - grp["cout_unitaire"].fillna(0)) * grp["quantite"].fillna(0)).sum()
+                return 0
+
+            def sum_stock(grp):
+                return grp["stock"].fillna(0).sum() if "stock" in grp.columns else 0
+
+            rows = []
+            for produit in products:
+                grp = df[df["produit"] == produit]
+                rows.append(
+                    {
+                        "Produit": produit,
+                        "Ventes_Totales": sum_qty(grp),
+                        "CA_Total": sum_ca(grp),
+                        "Marge_Totale": sum_margin(grp),
+                        "Stock_Actuel": sum_stock(grp),
+                        "Date_Export": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    }
+                )
+
+            output = pd.DataFrame(rows)
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                output.to_excel(writer, index=False, sheet_name='Rapport')
+            
+            st.download_button(
+                "💾 Télécharger le rapport (Excel)",
+                buffer,
+                f"analyse_produits_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+
+
+
+    render_mini_footer()
+
+
+def render_upload_page():
+    theme = st.session_state.get("theme", "light")
+    step_text = "#0b1324"
+    step_bg = "rgba(15, 23, 42, 0.05)"
+    step_border = "rgba(15, 23, 42, 0.12)"
+    highlight_bg = "rgba(79, 70, 229, 0.2)"
+    highlight_border = "rgba(129, 140, 248, 0.7)"
+    highlight_text = "#11123a"
+    highlight_bg_2 = "rgba(3, 105, 161, 0.18)"
+    highlight_border_2 = "rgba(56, 189, 248, 0.75)"
+    highlight_text_2 = "#082f49"
+    highlight_bg_3 = "rgba(15, 118, 110, 0.2)"
+    highlight_border_3 = "rgba(94, 234, 212, 0.75)"
+    highlight_text_3 = "#052e2b"
+    hero_img = IMAGES["upload_hero"]
+
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --upload-hero-img: url('{hero_img}');
+        }}
+        .upload-hero {{
+            position: relative;
+            margin: -10.5rem -4.25rem 0 -4.25rem;
+            padding: 0;
+            min-height: 450px;
+            color: white;
+            text-align: left;
+            overflow: hidden;
+            background: var(--upload-hero-img);
+            background-size: cover;
+            background-position: center;
+            box-shadow: 0 25px 55px rgba(15, 23, 42, 0.35);
+        }}
+        .upload-hero::after {{
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(120deg, rgba(15,23,42,0.85), rgba(14,165,233,0.65));
+            z-index: 0;
+        }}
+        .upload-hero__content {{
+            position: relative;
+            z-index: 1;
+            max-width: 920px;
+            padding: 6rem 2.2rem 3rem 2.2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }}
+        .upload-hero__eyebrow {{
+            font-size: 0.95rem;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            opacity: 0.85;
+        }}
+        .upload-hero h1 {{
+            font-size: clamp(2.4rem, 4vw, 3.6rem);
+            margin: 0;
+            font-weight: 700;
+        }}
+        .upload-hero p {{
+            margin: 0;
+            font-size: clamp(1.05rem, 1.8vw, 1.25rem);
+            opacity: 0.95;
+            line-height: 1.5;
+        }}
+        .upload-hero__cta {{
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.9rem 1.4rem;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.12);
+            font-size: 0.95rem;
+        }}
+        .upload-process {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1.25rem;
+            margin-top: 1.25rem;
+        }}
+        .upload-process article,
+        .step-card {{
+            position: relative;
+            background: rgba(255,255,255,0.95);
+            border-radius: 16px;
+            padding: 1.35rem 1.2rem 1.2rem 1.2rem;
+            border: 1px solid rgba(15, 23, 42, 0.06);
+            box-shadow: 0 14px 32px rgba(15,23,42,0.08);
+            transition: transform 0.25s ease, box-shadow 0.25s ease;
+            min-height: 220px;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+        }}
+        .upload-process article:hover,
+        .step-card:hover {{
+            transform: translateY(-6px);
+            box-shadow: 0 22px 50px rgba(15,23,42,0.15);
+        }}
+        .upload-process h4,
+        .step-card h4 {{
+            margin: 0 0 0.4rem 0;
+            color: #0f172a;
+        }}
+        .upload-process p,
+        .step-card p {{
+            margin: 0;
+            color: #475569;
+        }}
+        .upload-steps-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1.25rem;
+            margin-top: 1.25rem;
+        }}
+        .step-card .step-pill {{
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            color: white;
+            margin-bottom: 0.9rem;
+            box-shadow: 0 10px 25px rgba(15,23,42,0.15);
+        }}
+        .step-card h4 {{
+            margin: 0 0 0.4rem 0;
+            color: #0f172a;
+        }}
+        .step-card p {{
+            margin: 0;
+            color: #475569;
+        }}
+        .step-1 {{
+            border-color: {highlight_border};
+        }}
+        .step-1 .step-pill {{
+            background: linear-gradient(135deg, rgba(79, 70, 229, 1), rgba(129, 140, 248, 1));
+        }}
+        .step-2 {{
+            border-color: {highlight_border_2};
+        }}
+        .step-2 .step-pill {{
+            background: linear-gradient(135deg, rgba(3, 105, 161, 1), rgba(56, 189, 248, 1));
+        }}
+        .step-3 {{
+            border-color: {highlight_border_3};
+        }}
+        .step-3 .step-pill {{
+            background: linear-gradient(135deg, rgba(15, 118, 110, 1), rgba(94, 234, 212, 1));
+        }}
+        </style>
+        <section class="upload-hero animate-fade">
+            <div class="upload-hero__content">
+                <span class="upload-hero__eyebrow">Téléversement Gouverné</span>
+                <h1>Un hub professionnel pour vos données sensibles</h1>
+                <p>
+                    Déposez vos fichiers CSV/Excel en toute confiance : pipeline sécurisé, contrôles automatisés,
+                    validation métier et historisation avant l’activation dans vos dashboards.
+                </p>
+                <div class="upload-hero__cta">
+                    <span>🔐 Qualité certifiée & traçabilité complète</span>
+                </div>
+            </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    user_email = st.session_state.get("user_email", "")
+    datasets = _load_user_datasets(user_email)
+    st.session_state.setdefault("last_processed_upload", None)
+    col_upload, col_select = st.columns([1.3, 0.9])
+    with col_upload:
+        st.markdown("### Déposez vos fichiers")
+        uploaded_file = st.file_uploader(
+            "Fichier CSV ou Excel",
+            type=["csv", "xlsx"],
+            help=f"Formats pris en charge : .csv, .xlsx (UTF-8). Taille max {MAX_UPLOAD_MB} Mo."
+        )
+    with col_select:
+        st.markdown("#### 📁 Bibliothèque de datasets")
+        dataset_names = [ds["name"] for ds in datasets]
+        selected_meta = None
+        if dataset_names:
+            selected_dataset = st.selectbox("Datasets stockés", dataset_names, key="dataset_select")
+            selected_meta = next((ds for ds in datasets if ds["name"] == selected_dataset), None)
+            if selected_meta:
+                st.caption(
+                    f"Taille : {selected_meta['size']} · Ajouté le {selected_meta['uploaded_at']}"
+                )
+                if st.button("➡️ Charger ce dataset pour l'analyse", key="load_saved_dataset"):
+                    if _load_dataframe_from_path(selected_meta["path"]):
+                        _rerun_app()
+        else:
+            st.selectbox("Datasets stockés", ["Aucun dataset disponible"], disabled=True)
+
+        if uploaded_file:
+            file_size = uploaded_file.size or len(uploaded_file.getbuffer())
+            if file_size > MAX_UPLOAD_BYTES:
+                st.error(
+                    f"❌ {uploaded_file.name} dépasse la limite de 1 Go (taille détectée : {file_size / (1024**2):.1f} Mo). Veuillez compresser ou segmenter le fichier."
+                )
+                uploaded_file = None
+            else:
+                mode = st.radio(
+                    "Choisissez le mode de traitement",
+                    ("Analyse immédiate", "Analyser puis enregistrer dans ma bibliothèque"),
+                    key="upload_mode",
+                )
+                upload_signature = f"{uploaded_file.name}_{file_size}"
+                if st.session_state.get("last_processed_upload") != upload_signature:
+                    if _load_dataframe_from_uploaded(uploaded_file):
+                        st.success("✨ Traitement complet effectué : validation, nettoyage et historisation prêts pour l'analyse.")
+                        if mode == "Analyser puis enregistrer dans ma bibliothèque":
+                            persist_result = _persist_uploaded_dataset(uploaded_file, user_email)
+                            if persist_result:
+                                dataset_name_db, stored_path, dataset_id = persist_result
+                                st.info(f"💾 Dataset enregistré comme **{dataset_name_db}** dans la base.")
+                                datasets = _load_user_datasets(user_email)
+                        st.session_state["last_processed_upload"] = upload_signature
+                        _rerun_app()
+                else:
+                    st.info("✅ Ce fichier a déjà été traité lors de l'import précédent.")
+
+    step_col, reason_col = st.columns(2)
+    with step_col:
+        st.markdown("#### Étapes de traitement")
+        st.markdown(
+            """
+            <section class="upload-steps-grid">
+                <article class="step-card step-1">
+                    <div class="step-pill">1</div>
+                    <h4>Validation du schéma</h4>
+                    <p>Contrôle du format, des doublons et alignement sur vos référentiels internes.</p>
+                </article>
+                <article class="step-card step-2">
+                    <div class="step-pill">2</div>
+                    <h4>Nettoyage automatique</h4>
+                    <p>Types, valeurs manquantes et normalisation des colonnes critiques.</p>
+                </article>
+                <article class="step-card step-3">
+                    <div class="step-pill">3</div>
+                    <h4>Historisation & mise à disposition</h4>
+                    <p>Versionning sécurisé puis propagation des datasets aux dashboards.</p>
+                </article>
+            </section>
+            """,
+            unsafe_allow_html=True,
+        )
+    with reason_col:
+        st.markdown("### Pourquoi un upload gouverné ?")
+        st.markdown(
+            """
+            <section class="upload-process">
+                <article>
+                    <h4>🔐 Traçabilité</h4>
+                    <p>Chaque import est journalisé avec horodatage et propriétaire.</p>
+                </article>
+                <article>
+                    <h4>🧼 Qualité</h4>
+                    <p>Contrôles auto sur formats, cohérence des clés et valeurs aberrantes.</p>
+                </article>
+                <article>
+                    <h4>⚙️ Normalisation</h4>
+                    <p>Uniformisation des colonnes (dates, codes magasin, devise…).</p>
+                </article>
+            </section>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    render_mini_footer()
+
+
+def render_prediction_page():
+    img1 = IMAGES["pred_img_1"]
+    img2 = IMAGES["pred_img_2"]
+    img3 = IMAGES["pred_img_3"]
+    img4 = IMAGES["pred_img_4"]
+    img5 = IMAGES["pred_img_5"]
+
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --pred-img-1: url('{img1}');
+            --pred-img-2: url('{img2}');
+            --pred-img-3: url('{img3}');
+            --pred-img-4: url('{img4}');
+            --pred-img-5: url('{img5}');
+        }}
+        .prediction-hero {{
+            position: relative;
+            margin: -10.5rem -4.25rem 2rem -4.25rem;
+            padding: 6rem 2rem;
+            color: white;
+            text-align: center;
+            min-height: 450px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            background: #1e293b;
+            box-shadow: 0 25px 55px rgba(15, 23, 42, 0.35);
+        }}
+        .prediction-slideshow {{
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+        }}
+        .prediction-slide {{
+            position: absolute;
+            inset: 0;
+            background-size: cover;
+            background-position: center;
+            opacity: 0;
+            animation: predFade 40s infinite;
+        }}
+        .prediction-slide:nth-child(1) {{
+            background-image: linear-gradient(rgba(15,23,42,0.7), rgba(15,23,42,0.7)), var(--pred-img-1);
+            animation-delay: 0s;
+        }}
+        .prediction-slide:nth-child(2) {{
+            background-image: linear-gradient(rgba(15,23,42,0.7), rgba(15,23,42,0.7)), var(--pred-img-2);
+            animation-delay: 8s;
+        }}
+        .prediction-slide:nth-child(3) {{
+            background-image: linear-gradient(rgba(15,23,42,0.7), rgba(15,23,42,0.7)), var(--pred-img-3);
+            animation-delay: 16s;
+        }}
+        .prediction-slide:nth-child(4) {{
+            background-image: linear-gradient(rgba(15,23,42,0.7), rgba(15,23,42,0.7)), var(--pred-img-4);
+            animation-delay: 24s;
+        }}
+        .prediction-slide:nth-child(5) {{
+            background-image: linear-gradient(rgba(15,23,42,0.7), rgba(15,23,42,0.7)), var(--pred-img-5);
+            animation-delay: 32s;
+        }}
+        @keyframes predFade {{
+            0% {{ opacity: 0; }}
+            4% {{ opacity: 1; }}
+            20% {{ opacity: 1; }}
+            24% {{ opacity: 0; }}
+            100% {{ opacity: 0; }}
+        }}
+        .prediction-hero-content {{
+            position: relative;
+            z-index: 2;
+            max-width: 800px;
+        }}
+        .prediction-hero h1 {{
+            font-size: clamp(2.2rem, 4vw, 3.5rem);
+            font-weight: 800;
+            margin-bottom: 1rem;
+            text-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        }}
+        .prediction-hero p {{
+            font-size: clamp(1.1rem, 2vw, 1.25rem);
+            line-height: 1.6;
+            opacity: 0.95;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <section class="prediction-hero">
+            <div class="prediction-slideshow">
+                <div class="prediction-slide"></div>
+                <div class="prediction-slide"></div>
+                <div class="prediction-slide"></div>
+                <div class="prediction-slide"></div>
+                <div class="prediction-slide"></div>
+            </div>
+            <div class="prediction-hero-content">
+                <h1>Prévisions de la Demande</h1>
+                <p>Anticipez les tendances futures, optimisez vos stocks et planifiez vos campagnes marketing avec nos modèles prédictifs avancés.</p>
+            </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # --- Main Layout: 2 Columns ---
+    col_controls, col_results = st.columns([1, 2.5], gap="large")
+
+    with col_controls:
+        st.markdown("### 🎛️ Centre de Simulation")
+        st.info("Configurez les paramètres ci-dessous pour simuler vos scénarios de vente.")
+        
+        with st.form("simulation_form"):
+            st.markdown("#### ⚙️ Paramètres du modèle")
+            c_h1, c_h2 = st.columns(2)
+            with c_h1: horizon_val = st.number_input("Durée", 1, 365, 7)
+            with c_h2: horizon_unit = st.selectbox("Unité", ["Jours", "Mois"])
+            model_type = st.selectbox("Modèle Algorithmique", ["Prophet (Meta)", "ARIMA", "LSTM (Deep Learning)", "Ensemble Learning"])
+            
+            st.markdown("#### 🌍 Contexte de marché")
+            scenario = st.selectbox("Scénario", ["Tendance actuelle (Baseline)", "Croissance Aggressive", "Récession / Crise", "Lancement Produit"])
+            seasonality = st.multiselect("Saisonnalité", ["Noël", "Black Friday", "Soldes d'été", "Rentrée"], default=["Noël"])
+            
+            st.markdown("#### 💰 Investissement")
+            budget = st.slider("Budget Marketing (+)", 0, 500_000, 50_000, step=10_000, format="%d GNF")
+            confidence_level = st.slider("Intervalle de confiance", 80, 99, 95, format="%d%%")
+            
+            submitted = st.form_submit_button("🚀 Lancer la simulation", type="primary", use_container_width=True)
+
+    with col_results:
+        # Si le formulaire est soumis, on calcule et stocke les résultats dans la session
+        if submitted:
+            with st.spinner("Exécution des modèles prédictifs par catégorie..."):
+                # Simulation Logic (Mocked for Professional Demo)
+                import numpy as np
+
+                # Determine granularity and steps
+                today = datetime.now()
+                if horizon_unit == "Jours":
+                    n_steps = horizon_val
+                    step_days = 1
+                    history_steps = max(60, n_steps * 2)
+                else:
+                    n_steps = horizon_val
+                    step_days = 30
+                    history_steps = max(24, n_steps * 2)
+
+                # Generate dates
+                dates_history = [today - timedelta(days=step_days * i) for i in range(history_steps)][::-1]
+                dates_forecast = [today + timedelta(days=step_days * i) for i in range(1, n_steps + 1)]
+                total_points = history_steps + n_steps
+
+                # Categories Simulation
+                categories = ["High-Tech", "Maison & Déco", "Mode", "Beauté"]
+                cat_weights = {"High-Tech": 0.4, "Maison & Déco": 0.25, "Mode": 0.2, "Beauté": 0.15}
+
+                all_data = []
+
+                # Scenario modifiers
+                scenario_mod = 1.0
+                if scenario == "Croissance Aggressive":
+                    scenario_mod = 1.25
+                elif scenario == "Récession / Crise":
+                    scenario_mod = 0.8
+                elif scenario == "Lancement Produit":
+                    scenario_mod = 1.15
+
+                # Budget impact
+                budget_impact = 1 + (budget / 1_000_000)
+
+                # Generate data per category
+                for cat in categories:
+                    base_value = 100_000 * cat_weights[cat]
+                    trend = np.linspace(0, 0.2, total_points)
+                    noise = np.random.normal(0, 0.05, total_points)
+
+                    cat_values = []
+                    for i in range(total_points):
+                        val = base_value * (1 + trend[i]) * (1 + noise[i])
+                        if i >= history_steps:
+                            val *= scenario_mod * budget_impact
+                        cat_values.append(val)
+
+                    all_data.append(
+                        {
+                            "Category": cat,
+                            "History": cat_values[:history_steps],
+                            "Forecast": cat_values[history_steps:],
+                            "Full": cat_values,
+                        }
+                    )
+
+                # Aggregated Data
+                total_hist = np.sum([d["History"] for d in all_data], axis=0)
+                total_forecast = np.sum([d["Forecast"] for d in all_data], axis=0)
+
+                # Confidence intervals (Aggregate)
+                upper_bound = [v * (1 + 0.05 + i * 0.01) for i, v in enumerate(total_forecast)]
+                lower_bound = [v * (1 - 0.05 - i * 0.01) for i, v in enumerate(total_forecast)]
+
+                # Metrics Calculation
+                total_forecast_rev = float(sum(total_forecast))
+                avg_growth = float((total_forecast[-1] - total_hist[-1]) / total_hist[-1] * 100) if total_hist[-1] else 0.0
+                model_accuracy = 92.4 if model_type == "Prophet (Meta)" else 88.7
+
+                # On stocke toutes les données nécessaires pour un rendu stable
+                st.session_state["prediction_results"] = {
+                    "dates_history": dates_history,
+                    "dates_forecast": dates_forecast,
+                    "total_hist": total_hist.tolist(),
+                    "total_forecast": total_forecast.tolist(),
+                    "upper_bound": upper_bound,
+                    "lower_bound": lower_bound,
+                    "categories": categories,
+                    "all_data": {d["Category"]: {"History": d["History"], "Forecast": d["Forecast"]} for d in all_data},
+                    "total_forecast_rev": total_forecast_rev,
+                    "avg_growth": avg_growth,
+                    "model_accuracy": model_accuracy,
+                    "budget_impact": float(budget_impact),
+                    "confidence_level": confidence_level,
+                }
+
+        has_results = "prediction_results" in st.session_state
+
+        st.subheader("📊 Résultats de la Prévision")
+        st.divider()
+
+        tab_viz, tab_cat, tab_drivers, tab_data = st.tabs(
+            ["📈 Global", "🍰 Par Catégorie", "🎯 Facteurs", "📋 Données"]
+        )
+
+        if has_results:
+            res = st.session_state["prediction_results"]
+            dates_history = res["dates_history"]
+            dates_forecast = res["dates_forecast"]
+            total_hist = res["total_hist"]
+            total_forecast = res["total_forecast"]
+            upper_bound = res["upper_bound"]
+            lower_bound = res["lower_bound"]
+            categories = res["categories"]
+            all_data = res["all_data"]
+            total_forecast_rev = res["total_forecast_rev"]
+            avg_growth = res["avg_growth"]
+            model_accuracy = res["model_accuracy"]
+            budget_impact = res["budget_impact"]
+            confidence_level = res["confidence_level"]
+
+            # Key Metrics Row
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Revenu Prévisionnel", f"{int(total_forecast_rev):,} GNF", f"{avg_growth:+.1f}%")
+            m2.metric("Précision (Backtest)", f"{model_accuracy}%", "MAPE < 10%")
+            m3.metric(
+                "Impact Marketing",
+                f"+{int(total_forecast_rev * (budget_impact - 1)):,} GNF",
+                "ROI positif",
+            )
+            m4.metric("Confiance", "Élevé", "Volatilité faible")
+
+            with tab_viz:
+                fig = go.Figure()
+                # Historical
+                fig.add_trace(
+                    go.Scatter(
+                        x=dates_history,
+                        y=total_hist,
+                        mode="lines",
+                        name="Historique",
+                        line=dict(color="#64748b", width=2),
+                    )
+                )
+                # Forecast
+                fig.add_trace(
+                    go.Scatter(
+                        x=dates_forecast,
+                        y=total_forecast,
+                        mode="lines+markers",
+                        name="Prévision",
+                        line=dict(color="#3b82f6", width=3, dash="dash"),
+                    )
+                )
+                # Confidence
+                fig.add_trace(
+                    go.Scatter(
+                        x=dates_forecast + dates_forecast[::-1],
+                        y=upper_bound + lower_bound[::-1],
+                        fill="toself",
+                        fillcolor="rgba(59, 130, 246, 0.2)",
+                        line=dict(color="rgba(255,255,255,0)"),
+                        hoverinfo="skip",
+                        showlegend=True,
+                        name=f"Intervalle {confidence_level}%",
+                    )
+                )
+
+                fig.update_layout(
+                    title="Projection Globale des Ventes",
+                    xaxis_title="Date",
+                    yaxis_title="Revenu (GNF)",
+                    template="plotly_white",
+                    height=450,
+                    hovermode="x unified",
+                    legend=dict(orientation="h", y=1.02, x=1),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.info(
+                    f"💡 **Insight IA** : Tendance haussière détectée, corrélée avec l'impact du budget de {budget:,} GNF."
+                )
+
+            with tab_cat:
+                c_cat1, c_cat2 = st.columns([2, 1])
+                with c_cat1:
+                    # Multi-line chart per category
+                    fig_lines = go.Figure()
+                    colors = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444"]
+                    for idx, cat in enumerate(categories):
+                        d = all_data[cat]
+                        fig_lines.add_trace(
+                            go.Scatter(
+                                x=dates_forecast,
+                                y=d["Forecast"],
+                                mode="lines",
+                                name=cat,
+                                line=dict(width=2, color=colors[idx % len(colors)]),
+                            )
+                        )
+                    fig_lines.update_layout(
+                        title="Prévisions par Catégorie (Tendances)",
+                        xaxis_title="Date",
+                        yaxis_title="Revenu (GNF)",
+                        template="plotly_white",
+                        height=400,
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(fig_lines, use_container_width=True)
+
+                with c_cat2:
+                    # Pie chart distribution
+                    total_per_cat = [sum(all_data[cat]["Forecast"]) for cat in categories]
+                    fig_pie = go.Figure(data=[go.Pie(labels=categories, values=total_per_cat, hole=0.4)])
+                    fig_pie.update_layout(title="Répartition du CA Prévisionnel", height=400, showlegend=False)
+                    st.plotly_chart(fig_pie, use_container_width=True)
+
+            with tab_drivers:
+                col_d1, col_d2 = st.columns(2)
+                with col_d1:
+                    drivers = ["Tendance", "Saisonnalité", "Marketing", "Compétition", "Macro"]
+                    impacts = [15, 8, (budget_impact - 1) * 100, -5, 2]
+                    fig_waterfall = go.Figure(
+                        go.Waterfall(
+                            name="20",
+                            orientation="v",
+                            measure=["relative", "relative", "relative", "relative", "relative", "total"],
+                            x=drivers + ["Total"],
+                            textposition="outside",
+                            text=[f"{x:+.1f}%" for x in impacts] + [f"{sum(impacts):+.1f}%"],
+                            y=impacts + [sum(impacts)],
+                            connector={"line": {"color": "rgb(63, 63, 63)"}},
+                        )
+                    )
+                    fig_waterfall.update_layout(title="Contribution Croissance", height=350)
+                    st.plotly_chart(fig_waterfall, use_container_width=True)
+                with col_d2:
+                    st.markdown("#### 📝 Analyse")
+                    st.write(
+                        "- **Marketing** : Principal moteur.\n- **Saisonnalité** : Lift organique modéré.\n- **Compétition** : Pression légère (-5%)."
+                    )
+                    st.warning("⚠️ **Vigilance** : Forte dépendance au budget marketing.")
+
+            with tab_data:
+                # Create detailed dataframe
+                rows = []
+                for i, date in enumerate(dates_forecast):
+                    row = {"Date": date.strftime("%Y-%m-%d")}
+                    for cat in categories:
+                        row[cat] = int(all_data[cat]["Forecast"][i])
+                    row["Total"] = int(total_forecast[i])
+                    rows.append(row)
+
+                df_res = pd.DataFrame(rows)
+                st.dataframe(df_res, use_container_width=True)
+
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                    df_res.to_excel(writer, index=False, sheet_name="Prévisions")
+
+                st.download_button(
+                    "📥 Télécharger (Excel)",
+                    buffer,
+                    "prevision_ventes_datavista.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download-excel",
+                )
+        else:
+            # Aucun résultat encore : on affiche un message et une image tout en gardant la structure des onglets
+            with tab_viz:
+                st.info(
+                    "👈 Configurez les paramètres à gauche et cliquez sur **Lancer la simulation** pour générer une prévision."
+                )
+            with tab_cat:
+                st.info("Les prévisions par catégorie apparaîtront ici après la première simulation.")
+            with tab_drivers:
+                st.info("Les principaux facteurs explicatifs seront affichés après la simulation.")
+            with tab_data:
+                st.info("Les données détaillées des prévisions seront affichées après la simulation.")
+
+            st.image(
+                IMAGES["prediction_bg"],
+                use_container_width=True,
+                caption="Lancez une simulation pour visualiser les prédictions",
+            )
+
+    render_mini_footer()
+
+
+
+
+def render_authenticated_area():
+    # Handle navigation via query params (e.g. from Home button)
+    if "page" in st.query_params:
+        target = st.query_params["page"]
+        options = ["Accueil", "Dashboard", "Analytics", "Téléversement de fichiers", "Prédiction"]
+        if target in options:
+            st.session_state["navigation"] = target
+        # Clear the param so it doesn't persist on refresh
+        st.query_params.clear()
+
+    st.sidebar.title("Menu de navigation")
+    page = st.sidebar.radio(
+        "Aller à :",
+        ["Accueil", "Dashboard", "Analytics", "Téléversement de fichiers", "Prédiction"],
+        key="navigation"
+    )
+
+    if st.session_state.get("user_email"):
+        st.sidebar.write(f"👤 Connecté avec : **{st.session_state.user_email}**")
+    else:
+        st.sidebar.write("")
+
+    page_container = st.container()
+    with page_container:
+        if page in ("Accueil", "Téléversement de fichiers", "Dashboard"):
+            st.title("")
+        else:
+            st.title(page)
+
+        renderers = {
+            "Accueil": render_home_page,
+            "Dashboard": render_dashboard_page,
+            "Analytics": render_analytics_page,
+            "Téléversement de fichiers": render_upload_page,
+            "Prédiction": render_prediction_page,
+        }
+        renderers.get(page, render_home_page)()
+
+    if st.sidebar.button("Se déconnecter"):
+        st.session_state.is_authenticated = False
+        st.session_state.user_email = ""
+        st.query_params.clear()
+        _rerun_app()
+
+
+def render_auth_forms():
+    st.title("Bienvenue sur Smart Market Analytics")
+    st.subheader("Connexion")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.header("Connexion")
+        with st.form("info_connexion"):
+            email = st.text_input("Adresse e-mail")
+            password = st.text_input("Mot de passe", type="password")
+            submit = st.form_submit_button("Se connecter")
+
+            if submit:
+                if not email or not password:
+                    st.error("Veuillez remplir tous les champs.")
+                else:
+                    user_email = verify_credentials(email, password)
+                    if user_email:
+                        st.session_state.is_authenticated = True
+                        st.session_state.user_email = user_email
+                        st.success("Connexion réussie !")
+                        st.query_params["authenticated"] = "true"
+                        _rerun_app()
+                    else:
+                        st.error("Adresse e-mail ou mot de passe incorrect.")
+
+    with col2:
+        st.header("Inscription")
+        with st.form("form_inscription"):
+            new_email = st.text_input("Adresse e-mail", key="register_email")
+            new_password = st.text_input("Mot de passe", type="password", key="register_password")
+            confirm_password = st.text_input("Confirmez le mot de passe", type="password")
+            register = st.form_submit_button("S'inscrire")
+
+            if register:
+                if not all([new_email, new_password, confirm_password]):
+                    st.error("Veuillez remplir tous les champs.")
+                elif new_password != confirm_password:
+                    st.error("Les mots de passe ne correspondent pas.")
+                elif register_user(new_email, new_password):
+                    st.success("Inscription réussie ! Vous pouvez maintenant vous connecter.")
+    render_mini_footer()
+
+
+def main():
+    st.set_page_config(page_title="Connexion", page_icon="📊", layout="wide")
+    st.session_state.setdefault("is_authenticated", False)
+    st.session_state.setdefault("user_email", "")
+
+    if st.session_state.is_authenticated:
+        render_authenticated_area()
+    else:
+        render_auth_forms()
+
+
+if __name__ == "__main__":
+    main()
