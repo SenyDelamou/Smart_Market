@@ -3,7 +3,7 @@ CREATE DATABASE IF NOT EXISTS smart_market;
 USE smart_market;
 
 -- Table des utilisateurs
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     user_id INT PRIMARY KEY AUTO_INCREMENT,
     password_hash VARCHAR(255) NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
@@ -14,19 +14,19 @@ CREATE TABLE users (
 );
 
 -- Table des datasets utilisateur
-CREATE TABLE user_datasets (
+CREATE TABLE IF NOT EXISTS user_datasets (
     dataset_id INT PRIMARY KEY AUTO_INCREMENT,
     user_id INT NOT NULL,
     dataset_name VARCHAR(100) NOT NULL,
     file_path VARCHAR(255) NOT NULL,
-    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    upload_date DATETIME DEFAULT NULL,
     last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     is_active BOOLEAN DEFAULT TRUE,
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 
 -- Table météo
-CREATE TABLE meteo (
+CREATE TABLE IF NOT EXISTS meteo (
     meteo_id INT PRIMARY KEY AUTO_INCREMENT,
     date DATE NOT NULL,
     zone VARCHAR(50) NOT NULL,
@@ -38,7 +38,7 @@ CREATE TABLE meteo (
 );
 
 -- Table des tendances Google
-CREATE TABLE tendances (
+CREATE TABLE IF NOT EXISTS tendances (
     tendance_id INT PRIMARY KEY AUTO_INCREMENT,
     date DATE NOT NULL,
     mot_cle VARCHAR(100) NOT NULL,
@@ -49,7 +49,7 @@ CREATE TABLE tendances (
 );
 
 -- Table des jours fériés
-CREATE TABLE jours_feries (
+CREATE TABLE IF NOT EXISTS jours_feries (
     ferie_id INT PRIMARY KEY AUTO_INCREMENT,
     date DATE NOT NULL,
     nom_ferie VARCHAR(100) NOT NULL,
@@ -60,7 +60,7 @@ CREATE TABLE jours_feries (
 );
 
 -- Table des prédictions
-CREATE TABLE predictions (
+CREATE TABLE IF NOT EXISTS predictions (
     prediction_id INT PRIMARY KEY AUTO_INCREMENT,
     dataset_id INT NOT NULL,
     date_prediction TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -75,7 +75,7 @@ CREATE TABLE predictions (
 );
 
 -- Table des ventes
-CREATE TABLE ventes (
+CREATE TABLE IF NOT EXISTS ventes_dataset (
     vente_id INT PRIMARY KEY AUTO_INCREMENT,
     dataset_id INT NOT NULL,
     date_vente DATE NOT NULL,
@@ -88,15 +88,15 @@ CREATE TABLE ventes (
     magasin VARCHAR(120),
     canal VARCHAR(80),
     devise VARCHAR(10) DEFAULT 'GNF',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (dataset_id) REFERENCES user_datasets(dataset_id)
 );
 
 -- Index pour optimiser les requêtes
-CREATE INDEX idx_ventes_date ON ventes(date_vente);
-CREATE INDEX idx_ventes_produit ON ventes(produit);
-CREATE INDEX idx_ventes_zone ON ventes(zone);
+CREATE INDEX idx_ventes_date ON ventes_dataset(date_vente);
+CREATE INDEX idx_ventes_produit ON ventes_dataset(produit);
+CREATE INDEX idx_ventes_zone ON ventes_dataset(zone);
 CREATE INDEX idx_meteo_date ON meteo(date);
 CREATE INDEX idx_tendances_date ON tendances(date);
 CREATE INDEX idx_predictions_date ON predictions(date_cible);
@@ -110,17 +110,17 @@ SELECT
     SUM(quantite) as total_quantite,
     SUM(quantite * prix_unitaire) as chiffre_affaires,
     SUM(quantite * (prix_unitaire - COALESCE(cout_unitaire, 0))) as benefice
-FROM ventes
+FROM ventes_dataset
 GROUP BY date_vente, zone;
 
 CREATE VIEW v_performance_produits AS
 SELECT 
-    v.produit,
-    v.categorie,
-    COUNT(DISTINCT v.date_vente) as jours_vente,
-    SUM(v.quantite) as total_quantite,
-    AVG(v.prix_unitaire) as prix_moyen,
-    SUM(v.quantite * v.prix_unitaire) as ca_total,
-    SUM(v.quantite * (v.prix_unitaire - COALESCE(v.cout_unitaire, 0))) as benefice_total
-FROM ventes v
-GROUP BY v.produit, v.categorie;
+    vd.produit,
+    vd.categorie,
+    COUNT(DISTINCT vd.date_vente) as jours_vente,
+    SUM(vd.quantite) as total_quantite,
+    AVG(vd.prix_unitaire) as prix_moyen,
+    SUM(vd.quantite * vd.prix_unitaire) as ca_total,
+    SUM(vd.quantite * (vd.prix_unitaire - COALESCE(vd.cout_unitaire, 0))) as benefice_total
+FROM ventes_dataset AS vd
+GROUP BY vd.produit, vd.categorie;

@@ -325,8 +325,8 @@ def _persist_uploaded_dataset(uploaded_file, user_email: str):
             destination.write(uploaded_file.getbuffer())
 
         cursor.execute(
-            "INSERT INTO user_datasets (user_id, dataset_name, file_path) VALUES (%s, %s, %s)",
-            (user_id, unique_name, str(file_path)),
+            "INSERT INTO user_datasets (user_id, dataset_name, file_path, upload_date) VALUES (%s, %s, %s, %s)",
+            (user_id, unique_name, str(file_path), datetime.now()),
         )
         dataset_id = cursor.lastrowid
         connection.commit()
