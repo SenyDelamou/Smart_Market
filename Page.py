@@ -33,10 +33,11 @@ def _rerun_app():
 
 
 DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "",  # Remplacez par votre mot de passe MySQL
-    "database": "smart_market",
+    "host": "sql12.freesqldatabase.com",
+    "user": "sql12809477",
+    "password": "SVFcfmAeUr",
+    "database": "sql12809477",
+    "port": 3306,
 }
 
 MAX_UPLOAD_BYTES = 1_000_000_000  # 1 Go
@@ -2134,6 +2135,15 @@ def render_upload_page():
         :root {{
             --upload-hero-img: url('{hero_img}');
         }}
+        body, .stApp {{
+            margin: 0 !important;
+            padding: 0 !important;
+        }}
+        .main .block-container {{
+            padding-top: 0 !important;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+        }}
         .upload-hero {{
             position: relative;
             margin: -10.5rem -4.25rem 0 -4.25rem;
@@ -2295,7 +2305,8 @@ def render_upload_page():
         uploaded_file = st.file_uploader(
             "Fichier CSV ou Excel",
             type=["csv", "xlsx"],
-            help=f"Formats pris en charge : .csv, .xlsx (UTF-8). Taille max {MAX_UPLOAD_MB} Mo."
+            help=f"Formats pris en charge : .csv, .xlsx (UTF-8). Taille max {MAX_UPLOAD_MB} Mo.",
+            key="main_file_uploader"
         )
     with col_select:
         st.markdown("#### 📁 Bibliothèque de datasets")
@@ -2312,7 +2323,7 @@ def render_upload_page():
                     if _load_dataframe_from_path(selected_meta["path"]):
                         _rerun_app()
         else:
-            st.selectbox("Datasets stockés", ["Aucun dataset disponible"], disabled=True)
+            st.selectbox("Datasets stockés", ["Aucun dataset disponible"], disabled=True, key="dataset_select_empty")
 
         if uploaded_file:
             file_size = uploaded_file.size or len(uploaded_file.getbuffer())
@@ -2408,6 +2419,15 @@ def render_prediction_page():
             --pred-img-3: url('{img3}');
             --pred-img-4: url('{img4}');
             --pred-img-5: url('{img5}');
+        }}
+        body, .stApp {{
+            margin: 0 !important;
+            padding: 0 !important;
+        }}
+        .main .block-container {{
+            padding-top: 0 !important;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
         }}
         .prediction-hero {{
             position: relative;

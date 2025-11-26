@@ -91,10 +91,11 @@ def inject_animations():
     )
 
 DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "",  # Remplacez par votre mot de passe MySQL
-    "database": "smart_market",
+    "host": "sql12.freesqldatabase.com",
+    "user": "sql12809477",
+    "password": "SVFcfmAeUr",
+    "database": "sql12809477",
+    "port": 3306,
 }
 
 MAX_UPLOAD_BYTES = 1_000_000_000  # 1 Go
